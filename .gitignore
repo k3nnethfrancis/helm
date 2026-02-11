@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# Node
+node_modules/
+package-lock.json
+
+# SDK binary (install separately — see README)
+bin/
+
+# macOS
+.DS_Store
+
+# Experiments (only curated examples tracked)
+experiments/*/
+!experiments/hub-spoke-parallel-build-c2e0a21d/
+
+# Internal planning docs
+plan.md
+
+# Claude Code
+.claude/
+
+# Dev artifacts
+/workspace/
+helm-architecture-playground.html
+scripts/spike-*

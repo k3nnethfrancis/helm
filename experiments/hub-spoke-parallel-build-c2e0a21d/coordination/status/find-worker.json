@@ -1,0 +1,23 @@
+{
+  "worker": "find-worker",
+  "status": "complete",
+  "task": "build filekit find subcommand",
+  "output": "workspace/src/filekit/commands/find.py",
+  "timestamp": "2026-02-10T20:19:00Z",
+  "details": {
+    "architecture": "Follows Decision 001 — argparse register(subparsers) pattern, stdlib only, uses shared utils",
+    "features": [
+      "glob pattern matching via walk_files() (--pattern)",
+      "regex pattern matching on filenames (--regex)",
+      "file size filtering (--min-size, --max-size) with human-readable units",
+      "modification time filtering (--newer, --older) with relative and absolute specs",
+      "content search inside files (--content) with regex",
+      "verbose output with format_table() showing size and mtime (--verbose)",
+      "configurable root directory (default: cwd)",
+      "graceful permission error handling (skip + warn to stderr)"
+    ],
+    "dependencies": ["stdlib only"],
+    "shared_utils_used": ["walk_files", "human_readable_size", "format_table"],
+    "entry_point": "register(subparsers) → handler(args) → int"
+  }
+}

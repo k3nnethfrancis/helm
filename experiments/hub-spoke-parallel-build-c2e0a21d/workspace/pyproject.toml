@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "filekit"
+version = "0.1.0"
+description = "A CLI toolkit for file operations: find, dedupe, rename, and stats."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+filekit = "filekit.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/filekit"]

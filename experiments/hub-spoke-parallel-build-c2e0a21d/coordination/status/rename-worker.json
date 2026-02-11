@@ -1,0 +1,27 @@
+{
+  "worker": "rename-worker",
+  "status": "complete",
+  "deliverables": [
+    "src/filekit/commands/rename.py"
+  ],
+  "removed": [
+    "src/output.py (superseded by shared utils.format_table)"
+  ],
+  "features": {
+    "regex_replacement": "--pattern / --replacement with backreference support",
+    "prefix_suffix": "--prefix / --suffix (applied to stem, before extension)",
+    "sequential_numbering": "--number with --start and --padding",
+    "preview_by_default": "always shows old -> new table before executing",
+    "execute_flag": "--execute required to apply changes",
+    "undo": "--undo reverses last rename via .filekit_rename_history.json",
+    "collision_detection": "errors on disk collisions and intra-plan collisions",
+    "recursive": "-r flag for recursive directory search"
+  },
+  "contract": {
+    "register": "exports register(subparsers) per module contract",
+    "return_code": "handler returns 0 on success, 1 on error",
+    "output": "stdout via format_table(), errors to stderr",
+    "dependencies": "stdlib only, uses filekit.utils.format_table and walk_files"
+  },
+  "tested": true
+}

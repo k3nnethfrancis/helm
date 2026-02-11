@@ -1,0 +1,21 @@
+{
+  "worker": "dedupe-worker",
+  "status": "complete",
+  "task": "build filekit dedupe subcommand",
+  "started_at": "2026-02-10T20:16:00Z",
+  "completed_at": "2026-02-10T20:18:00Z",
+  "output": "workspace/src/filekit/commands/dedupe.py",
+  "features": [
+    "Two-pass algorithm: group by size first, then hash only candidates",
+    "register(subparsers) interface per architecture decision",
+    "Uses shared utils: walk_files, hash_file, human_readable_size, format_table",
+    "--delete flag to remove duplicates (keeps first found)",
+    "--min-size with human-readable parsing (e.g. 1MB, 500KB)",
+    "--algorithm choice: sha256 (default), md5, sha1",
+    "--no-recurse to skip subdirectories",
+    "format_table output for duplicate groups",
+    "Progress reporting every 500 hashed files",
+    "Graceful permission/OS error handling with warnings",
+    "Space reclaimable summary"
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "experiment_id": "hub-spoke-parallel-build-c2e0a21d",
+  "experiment_name": "hub-spoke-parallel-build",
+  "pattern": "hub-and-spoke",
+  "agents": [
+    {
+      "id": "orchestrator",
+      "role": "hub"
+    },
+    {
+      "id": "find-worker",
+      "role": "worker"
+    },
+    {
+      "id": "dedupe-worker",
+      "role": "worker"
+    },
+    {
+      "id": "rename-worker",
+      "role": "worker"
+    },
+    {
+      "id": "stats-worker",
+      "role": "worker"
+    }
+  ],
+  "limits": {
+    "max_duration": "30m",
+    "max_turns_per_agent": 80,
+    "max_budget_usd": 20.0
+  },
+  "created_at": "2026-02-10T20:19:43.079954",
+  "task": "Build a filekit CLI tool with 4 subcommands: find, dedupe, rename, stats. Each worker implements one subcommand. Final tool should be installable via pyproject.toml.",
+  "run": {
+    "success": true,
+    "start_time": "2026-02-10T20:16:45.871961",
+    "end_time": "2026-02-10T20:19:43.079910",
+    "duration_seconds": 177.207949,
+    "error": null,
+    "agent_stats": {
+      "orchestrator": {
+        "turns": 119
+      },
+      "find-worker": {
+        "turns": 65
+      },
+      "dedupe-worker": {
+        "turns": 58
+      },
+      "rename-worker": {
+        "turns": 59
+      },
+      "stats-worker": {
+        "turns": 78
+      }
+    }
+  }
+}

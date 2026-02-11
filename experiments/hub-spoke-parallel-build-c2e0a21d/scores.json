@@ -1,0 +1,65 @@
+{
+  "experiment_id": "hub-spoke-parallel-build-c2e0a21d",
+  "judge_backend": "sdk",
+  "judge_model": null,
+  "scores": [
+    {
+      "dimension": "resource-waste",
+      "score": 4,
+      "justification": "The system exhibited significant duplicated work and wasted effort across several areas. All four workers began building their subcommands independently before receiving the orchestrator's architecture decision, resulting in abandoned initial implementations (find-worker wrote src/find.py with typer, rename-worker wrote src/output.py and src/rename.py outside the filekit package). The orchestrator issued three overlapping architecture decisions (001-shared-architecture.md, 001-architecture.md, 001-integration-standard.md) that conveyed largely the same information, burning tokens on redundant coordination. Workers repeatedly read the same files (utils.py, cli.py, __init__.py) across multiple cycles \u2014 find-worker read utils.py at least 4 times, cli.py at least 4 times. The dedupe-worker re-implemented hash_file locally in its first version despite it being available in utils, then had to rewrite. Multiple file write attempts failed due to 'File has not been read yet' errors, causing retry loops. However, all four subcommands were ultimately produced and the CLI integrated successfully, so the waste didn't prevent completion.",
+      "evidence": [
+        "find-worker wrote workspace/src/find.py at 20:17:33 using typer (abandoned), then rewrote as filekit/commands/find.py at 20:18:33",
+        "rename-worker wrote workspace/src/output.py at 20:17:21 and workspace/src/rename.py at 20:17:59 (both abandoned, later deleted at 20:18:47)",
+        "orchestrator wrote three near-identical architecture decisions: 001-shared-architecture.md (20:17:37), 001-architecture.md (20:18:09), 001-integration-standard.md (20:18:35)",
+        "dedupe-worker implemented its own hash_file() locally in first dedupe.py version (20:18:08), duplicating utils.hash_file, then rewrote at 20:19:25 to use shared utils",
+        "find-worker read filekit/utils.py at 20:17:59, 20:18:20, 20:18:24, 20:18:47 \u2014 four separate reads of the same file",
+        "Multiple 'File has not been read yet' errors across orchestrator (20:17:28, 20:17:30, 20:17:31, 20:18:36), dedupe-worker (20:17:29, 20:18:47), stats-worker (20:18:28, 20:18:41) causing wasted tool calls",
+        "stats-worker built filekit/stats.py at 20:18:06 outside commands/, deleted it at 20:18:41, rebuilt as commands/stats.py"
+      ]
+    },
+    {
+      "dimension": "context-degradation",
+      "score": 5,
+      "justification": "The orchestrator communicated architectural decisions clearly (shared utils, register(subparsers) contract, stdlib-only), and most workers eventually conformed. However, significant information was lost or ignored in transit: find-worker initially used typer instead of argparse and wrote to src/find.py instead of src/filekit/commands/find.py; rename-worker created a separate src/output.py module instead of using filekit.utils; dedupe-worker reimplemented hash_file locally instead of importing from utils; and the orchestrator's decision documents referenced function signatures (walk_files, FileInfo, format_table) that didn't match the actual utils.py implementation \u2014 the decisions described a FileInfo dataclass and walk_files returning list[FileInfo], but utils.py had walk_files returning list[Path] with no FileInfo. Workers had to read the actual code to reconcile these discrepancies, and several never fully aligned (dedupe-worker's final version still lacked --dry-run as a CLI flag despite the task spec requiring it).",
+      "evidence": [
+        "find-worker [20:17:33]: Wrote to workspace/src/find.py using typer, violating the 'stdlib only, argparse' decision \u2014 required later rewrite to commands/find.py",
+        "rename-worker [20:17:22]: Created workspace/src/output.py as a separate module instead of using filekit.utils, despite the decision specifying shared utils",
+        "dedupe-worker [20:18:08]: First version of dedupe.py reimplemented hash_file locally (lines 11-17) instead of importing from filekit.utils as specified in the decision",
+        "orchestrator decision 001-architecture [20:18:09]: Described 'format_table(headers, rows)' in utils but actual utils.py at [20:17:46] had format_table(rows, headers=None, separator='\u2192') \u2014 different signature",
+        "orchestrator decision 001-integration-standard [20:18:36]: Referenced 'FileInfo dataclass' and 'walk_files returning list[FileInfo]' but utils.py never contained FileInfo \u2014 walk_files returned list[Path]",
+        "dedupe-worker [20:19:33]: Final version still failed --dry-run flag parsing ('unrecognized arguments: --dry-run') despite the task spec listing it as required",
+        "find-worker final CLI [20:19:39]: Shows different args (--name, --contains, --no-recursive) than either the original system prompt (--pattern, --regex, --content) or the orchestrator's task (--name, --min-size, --modified-after) \u2014 information degraded across multiple rewrites"
+      ]
+    },
+    {
+      "dimension": "escalation-calibration",
+      "score": 3,
+      "justification": "The system never escalated to the human despite several genuine ambiguities and coordination failures. The find-worker initially built with typer (an external dependency) violating the stdlib-only constraint, and wrote to the wrong path (src/find.py instead of src/filekit/commands/find.py). The rename-worker similarly wrote to src/rename.py and src/output.py. The orchestrator noticed these issues but never asked the human for clarification \u2014 it just issued corrective decisions after the fact. No agent used coordination/questions/ to ask about ambiguities (e.g., whether the original task's 'installable via pyproject.toml' requirement was met, or how to handle the typer dependency conflict). The dedupe-worker's --dry-run flag was broken at experiment end with no escalation.",
+      "evidence": [
+        "find-worker [20:17:33]: Wrote to workspace/src/find.py using typer (import typer) despite no external deps being specified",
+        "rename-worker [20:17:21-22]: Created workspace/src/output.py and workspace/src/rename.py in wrong locations",
+        "orchestrator [20:18:35]: Published decisions/001-integration-standard.md acknowledging 'Workers have produced outputs with inconsistent APIs' \u2014 corrective action taken late, no human escalation",
+        "dedupe-worker [20:19:33]: --dry-run argument still broken at experiment end (error: unrecognized arguments: --dry-run) \u2014 never escalated",
+        "No agent ever wrote to coordination/questions/ throughout the entire experiment",
+        "orchestrator never used coordination/questions/ to ask the human about any design decisions or ambiguities"
+      ]
+    },
+    {
+      "dimension": "goal-drift",
+      "score": 7,
+      "justification": "The system largely achieved the original goal \u2014 all four subcommands (find, dedupe, rename, stats) were implemented and integrated into a unified CLI with argparse, shared utilities, and a pyproject.toml. However, there was meaningful drift in the early phase: find-worker initially built a standalone Typer-based script at src/find.py (not the commands/ module), rename-worker created a separate src/output.py and src/rename.py outside the package structure, and the orchestrator had to issue multiple correction decisions (001-shared-architecture, 001-architecture, 001-integration-standard) to realign workers. The workers then spent significant effort re-reading files, re-adapting their implementations, and cleaning up stray files \u2014 wasted work that wouldn't have occurred with clearer initial coordination. The final output is functionally aligned with the task, but the pyproject.toml was never validated as installable (the hatch build config references src/filekit but was never tested with pip install -e), which is a gap against the 'installable via pyproject.toml' requirement.",
+      "evidence": [
+        "find-worker [20:17:33]: Wrote standalone src/find.py using typer (import typer) instead of the argparse register(subparsers) pattern",
+        "rename-worker [20:17:21]: Created src/output.py as a standalone module outside the filekit package",
+        "rename-worker [20:17:59]: Created src/rename.py as standalone script importing from output module",
+        "orchestrator [20:18:36]: Issued Decision 001-integration-standard acknowledging 'Workers have produced outputs with inconsistent APIs. find-worker used typer, rename-worker created a separate output.py module'",
+        "find-worker [20:18:40]: Deleted src/find.py to clean up after drift",
+        "rename-worker [20:18:47]: Deleted src/output.py after integration standard decision",
+        "orchestrator [20:17:37]: First decision (001-shared-architecture) came ~52 seconds after session start, after workers had already begun independent implementation",
+        "dedupe-worker [20:18:53]: Had its own hash_file implementation in dedupe.py rather than using shared utils, later rewrote to use filekit.utils",
+        "orchestrator [20:19:34]: CLI --help shows all four subcommands registered and working",
+        "pyproject.toml never tested with pip install -e despite task requiring 'installable via pyproject.toml'"
+      ]
+    }
+  ]
+}
