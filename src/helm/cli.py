@@ -15,6 +15,7 @@ import typer
 
 from helm.config import ExperimentConfig
 from helm.experiment import run_experiment
+from helm.sdk import SDKEvent
 
 app = typer.Typer(
     name="helm",
@@ -51,6 +52,17 @@ def static_turn_limit(action: str) -> callable:
         typer.echo(f"\n⚠ Agent '{agent_id}' reached turn limit ({turns}/{limit}) → {action}")
         return (action, None)
     return handler
+
+
+def notify_escalation(agent_id: str, event: SDKEvent, rule: object) -> None:
+    """Notify user when a run escalates to human intervention."""
+    reason = getattr(rule, "reason", None)
+    if not reason:
+        reason = event.data.get("prompt") or event.data.get("action") or event.type
+    typer.echo(
+        f"\n⚠ Escalation requested by '{agent_id}': {reason}",
+        err=True,
+    )
 
 
 def get_default_paths() -> tuple[Path, Path]:
@@ -157,6 +169,7 @@ def run(
                 task=task,
                 sdk_binary_path=sdk_path,
                 experiments_dir=exp_dir,
+                on_escalate=notify_escalation,
                 on_turn_limit=turn_limit_handler,
             )
         )

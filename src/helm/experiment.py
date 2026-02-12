@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from helm.collector import EventCollector
 from helm.config import AgentConfig, ExperimentConfig
 from helm.coordination import CoordinationBackend, CoordinationMessage, create_backend
-from helm.orchestrator import Orchestrator
+from helm.runtime_guard import RuntimeGuard
 from helm.sdk import SDKClient, SDKConfig, SDKEvent, SessionConfig
 
 
@@ -62,14 +62,17 @@ class Experiment:
 
         self._sdk: SDKClient | None = None
         self._backend: CoordinationBackend | None = None
-        self._orchestrator: Orchestrator | None = None
+        self._orchestrator: RuntimeGuard | None = None
         self._collector: EventCollector | None = None
         self._agent_sessions: dict[str, str] = {}  # agent_id -> session_id
         self._stop_event = asyncio.Event()
         self._streams_ended: set[str] = set()
+        self._stream_errors: dict[str, str] = {}
         self._start_time: datetime | None = None
         self._end_time: datetime | None = None
         self._task: str | None = None
+        self._ended_by_turn_limit = False
+        self._escalations: list[dict[str, Any]] = []
 
         # Per-agent turn limits (None = no limit / run indefinitely)
         self._agent_turn_limits: dict[str, int | None] = {
@@ -93,9 +96,14 @@ class Experiment:
         self._backend = create_backend(
             coord_config.mechanism, **coord_config.backend_settings
         )
-        await self._backend.setup(
-            self.experiment_dir, agent_ids, coord_config.model_dump()
-        )
+        coord_backend_config = coord_config.model_dump()
+        coord_backend_config["agent_roles"] = {
+            a.id: a.role.value if a.role else "peer"
+            for a in self.config.agents
+        }
+        hub = self.config.get_hub_agent()
+        coord_backend_config["hub_agent_id"] = hub.id if hub else None
+        await self._backend.setup(self.experiment_dir, agent_ids, coord_backend_config)
 
         # Start SDK daemon
         sdk_config = SDKConfig(binary_path=self.sdk_binary_path)
@@ -106,10 +114,10 @@ class Experiment:
         self._collector = EventCollector(self.experiment_id, self.config.name)
 
         # Initialize orchestrator
-        self._orchestrator = Orchestrator(
+        self._orchestrator = RuntimeGuard(
             self.config.orchestrator,
             self._sdk,
-            on_escalate=self.on_escalate,
+            on_escalate=self._handle_escalation,
         )
 
         # Create sessions for each agent
@@ -152,7 +160,11 @@ class Experiment:
         await self._sdk.create_session(session_id, session_config)
         self._agent_sessions[agent.id] = session_id
         self._collector.register_agent(agent.id, session_id)
-        self._orchestrator.register_agent(agent.id, session_id)
+        self._orchestrator.register_agent(
+            agent.id,
+            session_id,
+            role=agent.role.value if agent.role else "peer",
+        )
 
     async def _stage_workspace_files(self) -> None:
         """Download or copy workspace files specified in config.
@@ -230,9 +242,15 @@ class Experiment:
             await self._wait_for_completion(timeout)
 
             self._end_time = datetime.now()
-            result = self._build_result(success=True)
-            self._save_metadata(result)
-            return result
+            error = self._determine_run_error()
+            if error is not None:
+                result = self._build_result(success=False, error=error)
+                self._save_metadata(result)
+                return result
+            else:
+                result = self._build_result(success=True)
+                self._save_metadata(result)
+                return result
 
         except asyncio.TimeoutError:
             self._end_time = datetime.now()
@@ -317,6 +335,7 @@ Workspace directory: {self.experiment_dir / 'workspace'}
         except Exception as e:
             # Log but don't crash
             print(f"Error streaming events for {agent_id}: {e}")
+            self._stream_errors[agent_id] = str(e)
         finally:
             self._streams_ended.add(agent_id)
 
@@ -426,6 +445,7 @@ Workspace directory: {self.experiment_dir / 'workspace'}
                         pass
                 self._streams_ended.add(agent.id)
             elif action == "end_experiment":
+                self._ended_by_turn_limit = True
                 return True
 
         return False
@@ -458,6 +478,49 @@ Workspace directory: {self.experiment_dir / 'workspace'}
 
     def stop(self) -> None:
         """Signal the experiment to stop."""
+        self._stop_event.set()
+
+    def _determine_run_error(self) -> str | None:
+        """Determine whether run termination should be considered a failure."""
+        if self._stream_errors:
+            details = "; ".join(
+                f"{agent}: {error}" for agent, error in sorted(self._stream_errors.items())
+            )
+            return f"Event stream failed: {details}"
+
+        if self._escalations:
+            escalation = self._escalations[0]
+            reason = escalation.get("reason") or "human input required"
+            return (
+                "Escalation required human input and execution was paused. "
+                f"First escalation: {reason}"
+            )
+
+        if self._ended_by_turn_limit:
+            return "Turn limit reached; experiment ended before completion."
+
+        if not self._all_agents_done():
+            if self._stop_event.is_set():
+                return "Experiment stopped before completion signals were observed."
+            return "Experiment ended before completion signals were observed."
+
+        return None
+
+    def _handle_escalation(self, agent_id: str, event: SDKEvent, rule: Any) -> None:
+        """Handle escalation events by recording and pausing the run."""
+        record = {
+            "timestamp": datetime.now().isoformat(),
+            "agent_id": agent_id,
+            "event_type": event.type,
+            "reason": rule.reason if getattr(rule, "reason", None) else None,
+            "event_data": event.data,
+        }
+        self._escalations.append(record)
+
+        if self.on_escalate:
+            self.on_escalate(agent_id, event, rule)
+
+        # Pause the experiment so a human can inspect and decide next action.
         self._stop_event.set()
 
     def _save_metadata(self, result: ExperimentResult | None = None) -> None:
@@ -493,6 +556,8 @@ Workspace directory: {self.experiment_dir / 'workspace'}
                 "duration_seconds": (result.end_time - result.start_time).total_seconds(),
                 "error": result.error,
                 "agent_stats": result.agent_stats,
+                "escalations": self._escalations,
+                "stream_errors": self._stream_errors,
             }
 
         with open(self.experiment_dir / "metadata.json", "w") as f:
@@ -532,6 +597,7 @@ async def run_experiment(
     task: str,
     sdk_binary_path: Path,
     experiments_dir: Path,
+    on_escalate: Callable[[str, SDKEvent, Any], None] | None = None,
     on_turn_limit: Callable[[str, int, int], tuple[str, int | None]] | None = None,
 ) -> ExperimentResult:
     """Run an experiment from a config file."""
@@ -541,6 +607,7 @@ async def run_experiment(
         config=config,
         sdk_binary_path=sdk_binary_path,
         experiments_dir=experiments_dir,
+        on_escalate=on_escalate,
         on_turn_limit=on_turn_limit,
     )
 

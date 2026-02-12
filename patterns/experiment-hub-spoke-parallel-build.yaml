@@ -260,7 +260,7 @@ orchestrator:
 
     - on: no_activity
       after: 180s
-      then: nudge_coordinator
+      then: log
       message: "No activity detected. Check if workers are blocked."
 
 coordination:

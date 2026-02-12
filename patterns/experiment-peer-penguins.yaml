@@ -115,11 +115,6 @@ orchestrator:
       then: log
       message: "No activity for 2 minutes"
 
-    - on: no_activity
-      after: 300s
-      then: nudge
-      message: "Agents appear stuck. Consider checking coordination/messages/ for blocked requests."
-
 coordination:
   mechanism: filesystem
 

@@ -47,13 +47,14 @@ class CoordinationMessage:
             "sender": self.sender,
             "recipient": self.recipient,
             "message_type": self.message_type.value,
-            "content": self.content[:500],  # Truncate for storage
+            # Keep full payload for offline analysis/training.
+            "content": self.content,
             "source_path": self.source_path,
             "delivered": self.delivered,
             "delivery_timestamp": (
                 self.delivery_timestamp.isoformat() if self.delivery_timestamp else None
             ),
-            "nudge_text": self.nudge_text[:1000] if self.nudge_text else None,
+            "nudge_text": self.nudge_text,
             "metadata": self.metadata,
         }
 

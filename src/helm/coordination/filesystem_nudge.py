@@ -39,6 +39,8 @@ class FilesystemNudgeBackend:
         self._agents: list[str] = []
         self._config: dict[str, Any] = {}
         self._is_hub_spoke: bool = False
+        self._agent_roles: dict[str, str] = {}
+        self._hub_agent_id: str | None = None
 
         # Watched artifact patterns in workspace/ that trigger nudges
         self._workspace_watches: list[str] = []
@@ -62,6 +64,11 @@ class FilesystemNudgeBackend:
         self._experiment_dir = Path(experiment_dir)
         self._agents = agents
         self._config = config
+        self._agent_roles = {
+            agent_id: (role or "peer")
+            for agent_id, role in config.get("agent_roles", {}).items()
+        }
+        self._hub_agent_id = config.get("hub_agent_id")
 
         paths = config.get("paths", {})
         base = paths.get("base", "coordination/")
@@ -124,6 +131,9 @@ class FilesystemNudgeBackend:
             except asyncio.CancelledError:
                 pass
             self._poll_task = None
+        # Final best-effort flush so late files (often *.done) are captured
+        # in coordination_messages before teardown.
+        await self._poll_once(deliver_nudges=False)
 
     def is_complete(self, agents: list[str]) -> bool:
         """Check signal files for completion."""
@@ -176,38 +186,43 @@ class FilesystemNudgeBackend:
         """Poll for new files and process them."""
         while self._running:
             try:
-                # Scan coordination directory
-                current_files = self._scan_all_files()
-                new_files = current_files - self._known_files
-
-                for file_path in sorted(new_files):
-                    await self._handle_new_file(Path(file_path))
-
-                self._known_files = current_files
-
-                # Scan workspace for watched artifacts
-                if self._workspace_watches:
-                    current_ws = self._scan_workspace_files()
-                    new_ws = current_ws - self._known_workspace_files
-
-                    for file_path in sorted(new_ws):
-                        await self._handle_workspace_file(Path(file_path))
-
-                    self._known_workspace_files = current_ws
+                await self._poll_once(deliver_nudges=True)
             except Exception as e:
                 # Log but don't crash the poll loop
                 print(f"[coordination] poll error: {e}")
 
             await asyncio.sleep(self._poll_interval)
 
-    async def _handle_new_file(self, file_path: Path) -> None:
+    async def _poll_once(self, *, deliver_nudges: bool) -> None:
+        """Process newly observed coordination/workspace files once."""
+        # Scan coordination directory
+        current_files = self._scan_all_files()
+        new_files = current_files - self._known_files
+        for file_path in sorted(new_files):
+            await self._handle_new_file(Path(file_path), deliver_nudges=deliver_nudges)
+        self._known_files = current_files
+
+        # Scan workspace for watched artifacts
+        if not self._workspace_watches:
+            return
+
+        current_ws = self._scan_workspace_files()
+        new_ws = current_ws - self._known_workspace_files
+        for file_path in sorted(new_ws):
+            await self._handle_workspace_file(
+                Path(file_path),
+                deliver_nudges=deliver_nudges,
+            )
+        self._known_workspace_files = current_ws
+
+    async def _handle_new_file(self, file_path: Path, *, deliver_nudges: bool) -> None:
         """Classify a new file and deliver appropriate nudge."""
         if self._coord_dir is None:
             return
 
         relative = str(file_path.relative_to(self._coord_dir))
-        content = self._read_preview(file_path)
-        full_content = self._read_full(file_path)
+        full_content = self._read_text(file_path)
+        nudge_content = self._truncate_for_nudge(full_content, file_path.name)
         now = datetime.now()
 
         # Classify by path convention
@@ -218,7 +233,7 @@ class FilesystemNudgeBackend:
             sender=sender,
             recipient=recipient,
             message_type=msg_type,
-            content=content,
+            content=full_content,
             source_path=relative,
         )
 
@@ -226,8 +241,8 @@ class FilesystemNudgeBackend:
         # Skip completion signals in hub-spoke (signals/done = experiment over),
         # but deliver them in peer networks (agent.done = notify peers)
         skip_nudge = msg_type == MessageType.COMPLETION_SIGNAL and self._is_hub_spoke
-        if recipient and not skip_nudge:
-            nudge_text = self._build_nudge_text(message, full_content)
+        if deliver_nudges and recipient and not skip_nudge:
+            nudge_text = self._build_nudge_text(message, nudge_content)
             message.nudge_text = nudge_text
 
             if recipient == "__all__":
@@ -245,14 +260,14 @@ class FilesystemNudgeBackend:
         if self._on_message:
             self._on_message(message)
 
-    async def _handle_workspace_file(self, file_path: Path) -> None:
+    async def _handle_workspace_file(self, file_path: Path, *, deliver_nudges: bool) -> None:
         """Handle a new watched workspace artifact — notify all agents."""
         if self._experiment_dir is None:
             return
 
         relative = str(file_path.relative_to(self._experiment_dir))
-        content = self._read_preview(file_path)
-        full_content = self._read_full(file_path)
+        full_content = self._read_text(file_path)
+        nudge_content = self._truncate_for_nudge(full_content, file_path.name)
         now = datetime.now()
 
         message = CoordinationMessage(
@@ -260,22 +275,22 @@ class FilesystemNudgeBackend:
             sender=None,
             recipient="__all__",
             message_type=MessageType.STATUS_UPDATE,
-            content=content,
+            content=full_content,
             source_path=relative,
         )
 
         nudge_text = (
             f"[Artifact Created] {relative}\n\n"
             f"A new file has appeared in the workspace. Here is its content:\n\n"
-            f"---\n{full_content}\n---\n\n"
+            f"---\n{nudge_content}\n---\n\n"
             f"Continue your work based on this new information."
         )
-        message.nudge_text = nudge_text
-
-        for agent_id in self._agents:
-            await self._deliver_nudge(agent_id, nudge_text)
-        message.delivered = True
-        message.delivery_timestamp = datetime.now()
+        if deliver_nudges:
+            message.nudge_text = nudge_text
+            for agent_id in self._agents:
+                await self._deliver_nudge(agent_id, nudge_text)
+            message.delivered = True
+            message.delivery_timestamp = datetime.now()
 
         if self._on_message:
             self._on_message(message)
@@ -369,10 +384,19 @@ class FilesystemNudgeBackend:
         return None, None
 
     def _find_hub(self) -> str | None:
-        """Find the hub agent (first agent if hub-and-spoke, None otherwise)."""
-        if self._is_hub_spoke and self._agents:
-            # The hub is typically the first agent listed; we check config
-            # for explicit hub designation but fall back to first agent
+        """Find the hub agent from explicit config/roles."""
+        if not self._is_hub_spoke:
+            return None
+
+        if self._hub_agent_id and self._hub_agent_id in self._agents:
+            return self._hub_agent_id
+
+        for agent_id in self._agents:
+            if self._agent_roles.get(agent_id, "").lower() == "hub":
+                return agent_id
+
+        if self._agents:
+            # Backward-compatible fallback when no role metadata is available.
             return self._agents[0]
         return None
 
@@ -391,15 +415,21 @@ class FilesystemNudgeBackend:
         except Exception:
             return ""
 
-    def _read_full(self, file_path: Path) -> str:
-        """Read full file content, capped at MAX_NUDGE_CONTENT."""
+    def _read_text(self, file_path: Path) -> str:
+        """Read full file content for transcript capture."""
         try:
-            text = file_path.read_text(errors="replace")
-            if len(text) > self.MAX_NUDGE_CONTENT:
-                return text[: self.MAX_NUDGE_CONTENT] + f"\n\n[... truncated at {self.MAX_NUDGE_CONTENT} chars — read full file at {file_path.name}]"
-            return text
+            return file_path.read_text(errors="replace")
         except Exception:
             return ""
+
+    def _truncate_for_nudge(self, text: str, filename: str) -> str:
+        """Cap message content when injecting it into agent context."""
+        if len(text) <= self.MAX_NUDGE_CONTENT:
+            return text
+        return (
+            text[: self.MAX_NUDGE_CONTENT]
+            + f"\n\n[... truncated at {self.MAX_NUDGE_CONTENT} chars — read full file at {filename}]"
+        )
 
     def _build_nudge_text(self, message: CoordinationMessage, full_content: str) -> str:
         """Build the text injected into an agent's conversation as a user turn.

@@ -1,4 +1,4 @@
-"""Orchestrator for multi-agent experiments.
+"""Rule-based runtime guard for multi-agent experiments.
 
 Monitors agent activity, matches events against rules, and intervenes
 when configured conditions are met.
@@ -19,7 +19,7 @@ from helm.sdk import SDKClient, SDKEvent
 
 @dataclass
 class InterventionLog:
-    """Record of an orchestrator intervention."""
+    """Record of a runtime-guard intervention."""
 
     timestamp: datetime
     rule: OrchestratorRule
@@ -35,15 +35,16 @@ class AgentState:
 
     agent_id: str
     session_id: str
+    role: str | None = None
     last_activity: float = field(default_factory=time.time)
     turn_count: int = 0
     is_active: bool = True
 
 
-class Orchestrator:
-    """Monitors agents and applies intervention rules.
+class RuntimeGuard:
+    """Monitors agents and applies rule-based interventions.
 
-    The orchestrator:
+    The runtime guard:
     1. Watches event streams from all agents
     2. Matches events against configured rules
     3. Takes action (approve, reject, escalate, nudge)
@@ -65,9 +66,18 @@ class Orchestrator:
         self._stop_event = asyncio.Event()
         self._inactivity_tasks: dict[str, asyncio.Task] = {}
 
-    def register_agent(self, agent_id: str, session_id: str) -> None:
+    def register_agent(
+        self,
+        agent_id: str,
+        session_id: str,
+        role: str | None = None,
+    ) -> None:
         """Register an agent for monitoring."""
-        self._agents[agent_id] = AgentState(agent_id=agent_id, session_id=session_id)
+        self._agents[agent_id] = AgentState(
+            agent_id=agent_id,
+            session_id=session_id,
+            role=role,
+        )
 
     def get_agent_by_session(self, session_id: str) -> AgentState | None:
         """Get agent state by session ID."""
@@ -117,41 +127,43 @@ class Orchestrator:
 
         # Check agent filter
         if rule.from_agent and rule.from_agent != agent_id:
-            # Handle role-based matching
             agent = self._agents.get(agent_id)
-            if agent and rule.from_agent not in ("coordinator", "worker", agent_id):
+            if agent is None:
                 return False
-            if rule.from_agent == "coordinator":
-                # Hub agent check would go here
-                pass
-            elif rule.from_agent == "worker":
-                # Worker agent check would go here
-                pass
+
+            role_filter = rule.from_agent.strip().lower()
+            role = (agent.role or "").lower()
+            if role_filter in ("coordinator", "hub"):
+                if role != "hub":
+                    return False
+            elif role_filter == "worker":
+                if role != "worker":
+                    return False
+            elif role_filter == "peer":
+                if role and role != "peer":
+                    return False
+            else:
+                return False
 
         # Check condition
         if rule.if_condition:
             action = event.data.get("action", "")
-            condition = rule.if_condition.lower()
+            condition = rule.if_condition
 
-            # Parse "action contains X" patterns
-            if "contains" in condition:
-                match = re.search(r'action contains ["\']?([^"\']+)["\']?', condition)
-                if match:
-                    target = match.group(1)
-                    if target not in action:
-                        return False
-
-            # Parse "action contains X or action contains Y" patterns
-            elif " or " in condition:
-                parts = condition.split(" or ")
-                matched = False
-                for part in parts:
-                    match = re.search(r'action contains ["\']?([^"\']+)["\']?', part)
-                    if match and match.group(1) in action:
-                        matched = True
-                        break
-                if not matched:
+            # Parse one or more "action contains X" clauses (OR semantics).
+            # Example: action contains "curl" or action contains "wget"
+            targets = re.findall(
+                r'action contains ["\']?([^"\']+)["\']?',
+                condition,
+                flags=re.IGNORECASE,
+            )
+            if targets:
+                action_lower = action.lower()
+                if not any(target.lower() in action_lower for target in targets):
                     return False
+            else:
+                # Unknown condition syntax should not match implicitly.
+                return False
 
         return True
 
@@ -195,10 +207,23 @@ class Orchestrator:
 
         elif rule.then in (OrchestratorAction.NUDGE, OrchestratorAction.NUDGE_COORDINATOR):
             message = rule.message or "Please continue with your task."
-            await self.sdk.post_message(agent.session_id, message)
+            target = agent
+            if rule.then == OrchestratorAction.NUDGE_COORDINATOR:
+                coordinator = self._find_coordinator()
+                if coordinator:
+                    target = coordinator
+            await self.sdk.post_message(target.session_id, message)
             intervention.details["nudge_message"] = message
+            intervention.details["target_agent_id"] = target.agent_id
 
         self._interventions.append(intervention)
+
+    def _find_coordinator(self) -> AgentState | None:
+        """Find the hub/coordinator agent state if configured."""
+        for state in self._agents.values():
+            if (state.role or "").lower() == "hub":
+                return state
+        return None
 
     def _reset_inactivity_timer(self, agent: AgentState) -> None:
         """Reset the inactivity timer for an agent."""
@@ -244,7 +269,7 @@ class Orchestrator:
             return float(duration)
 
     def stop(self) -> None:
-        """Signal the orchestrator to stop."""
+        """Signal the runtime guard to stop."""
         self._stop_event.set()
         for task in self._inactivity_tasks.values():
             task.cancel()
@@ -257,3 +282,7 @@ class Orchestrator:
         """Get the turn count for an agent."""
         agent = self._agents.get(agent_id)
         return agent.turn_count if agent else 0
+
+
+# Backward-compatibility alias during terminology transition.
+Orchestrator = RuntimeGuard

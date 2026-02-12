@@ -180,7 +180,7 @@ orchestrator:
 
     - on: no_activity
       after: 300s
-      then: nudge
+      then: log
       message: "Agents appear stuck. Check coordination/messages/ for pending requests."
 
 coordination:

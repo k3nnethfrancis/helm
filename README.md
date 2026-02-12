@@ -47,7 +47,7 @@ Helm builds on [Sandbox Agent SDK](https://github.com/rivet-dev/sandbox-agent), 
 
 Helm adds:
 - **Experiment runner** — YAML-driven lifecycle management for multi-agent experiments
-- **Orchestrator** — Rule-based monitoring and intervention engine
+- **Runtime guard** — Rule-based monitoring and intervention engine
 - **Event collector** — Multi-stream aggregation into unified transcripts
 - **Judge system** — Dual-backend scoring (OpenRouter API or SDK headless) against dimension rubrics
 - **Coordination layer** — Pluggable filesystem-based inter-agent communication
@@ -61,7 +61,7 @@ Config (YAML) → Experiment Runner → Sandbox Agent SDK → Agent Sessions
                      ├───────────────────────┤
                      │                       │
                      ▼                       ▼
-                Orchestrator           Event Collector
+                Runtime Guard          Event Collector
                 (intervene)                  │
                                              ▼
                                           Judge
@@ -184,7 +184,7 @@ helm/
 ├── src/helm/              # Source package
 │   ├── cli.py             # Typer CLI
 │   ├── experiment.py      # Experiment lifecycle
-│   ├── orchestrator.py    # Rule-based intervention
+│   ├── runtime_guard.py   # Rule-based runtime guard
 │   ├── collector.py       # Event aggregation
 │   ├── judge.py           # Dual-backend scoring
 │   ├── sdk.py             # Sandbox Agent SDK client

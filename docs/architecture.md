@@ -18,12 +18,12 @@ Helm orchestrates multi-agent experiments, observes their behavior, and evaluate
 │                          │                                       │
 │                          ▼                                       │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │ Orchestrator                                             │    │
+│  │ Runtime Guard                                            │    │
 │  │ - Subscribes to event streams from all sessions          │    │
 │  │ - Applies intervention rules                             │    │
 │  │ - Approves/rejects permissions                           │    │
 │  │ - Detects stuck states, nudges agents                    │    │
-│  │ - (Optional) Agent-based orchestrator                    │    │
+│  │ - (Optional) Escalates/pauses for human intervention     │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                          │                                       │
 │     ┌────────────────────┼────────────────────┐                 │
@@ -80,7 +80,7 @@ Manages the full lifecycle of an experiment:
 4. **Collect**: Aggregate all events into unified transcript
 5. **Teardown**: Stop sessions, finalize artifacts
 
-### Orchestrator
+### Runtime Guard (Rule Engine)
 
 Monitors agent activity and decides when to intervene. Two modes:
 
@@ -95,7 +95,7 @@ rules:
     then: nudge
 ```
 
-**Agent-based**: A separate Claude instance that monitors all streams and makes judgment calls. More flexible but harder to analyze.
+**Agent-based (future)**: A separate agent could monitor streams and make judgment calls. More flexible but harder to analyze.
 
 ### Sandbox Agent SDK Integration
 
@@ -196,7 +196,7 @@ Experiment Runner ──► Sandbox Agent SDK ──► Agent Sessions
      ├───────────────────────┤
      │                       │
      ▼                       ▼
-Orchestrator           Event Collector
+Runtime Guard          Event Collector
      │                       │
      ▼                       ▼
 Intervention          Unified Transcript
@@ -269,7 +269,7 @@ The Sandbox Agent SDK exposes two intervention mechanisms:
 When an agent requests permission for an action, the orchestrator matches against rules:
 
 ```python
-# In orchestrator.py — rule matching and action
+# In runtime_guard.py — rule matching and action
 if event.type == "permission.requested":
     permission_id = event.data.get("permission_id")
     action = event.data.get("action", "")
