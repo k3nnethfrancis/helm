@@ -23,6 +23,7 @@ from helm.collector import EventCollector
 from helm.config import AgentConfig, ExperimentConfig
 from helm.coordination import CoordinationBackend, CoordinationMessage, create_backend
 from helm.runtime_guard import RuntimeGuard
+from helm.run_data import save_run_data
 from helm.sdk import SDKClient, SDKConfig, SDKEvent, SessionConfig
 
 
@@ -475,6 +476,12 @@ Workspace directory: {self.experiment_dir / 'workspace'}
 
             markdown_path = self.experiment_dir / "transcripts" / "full.md"
             self._collector.save_markdown(markdown_path)
+
+        # Save a versioned run-data contract for downstream analysis/training.
+        try:
+            save_run_data(self.experiment_dir)
+        except Exception as e:
+            print(f"Warning: failed to save run_data.json: {e}")
 
     def stop(self) -> None:
         """Signal the experiment to stop."""

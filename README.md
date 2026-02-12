@@ -23,7 +23,8 @@ These aren't bugs in any individual agent. They're emergent properties of multi-
 1. **Run multi-agent experiments** — Define coordination topologies in YAML, spawn agents, and let them work
 2. **Observe behavior** — Aggregate event streams, capture coordination artifacts, build transcripts
 3. **Evaluate coordination quality** — Score experiments against behavioral dimensions using LLM judges
-4. **Compare patterns** — Run the same task through different topologies and agent counts
+4. **Compute orchestration evals** — Deterministic metrics for parallelism, coordination overhead, escalation precision/recall
+5. **Compare patterns** — Run the same task through different topologies and agent counts
 
 ## The Seven Dimensions
 
@@ -51,6 +52,7 @@ Helm adds:
 - **Event collector** — Multi-stream aggregation into unified transcripts
 - **Judge system** — Dual-backend scoring (OpenRouter API or SDK headless) against dimension rubrics
 - **Coordination layer** — Pluggable filesystem-based inter-agent communication
+- **Run data contract** — Versioned `run_data.json` artifact for downstream analysis/training
 
 ```
 Config (YAML) → Experiment Runner → Sandbox Agent SDK → Agent Sessions
@@ -117,6 +119,10 @@ helm judge <experiment-id> \
 helm analyze <experiment-id>
 ```
 
+Each run now writes a versioned `run_data.json` artifact alongside
+`metadata.json`, transcripts, and scores. This is the stable contract for
+batch analysis and training data export.
+
 ### Define Your Own Experiment
 
 Experiments are YAML configs that specify agents, coordination topology, orchestrator rules, and evaluation dimensions. See `patterns/` for examples.
@@ -143,8 +149,8 @@ orchestrator:
   rules:
     - on: no_activity
       after: 120s
-      then: nudge
-      message: "Check coordination/messages/ for updates."
+      then: log
+      message: "No activity for 2 minutes."
 
 evaluation:
   dimensions:
@@ -187,6 +193,7 @@ helm/
 │   ├── runtime_guard.py   # Rule-based runtime guard
 │   ├── collector.py       # Event aggregation
 │   ├── judge.py           # Dual-backend scoring
+│   ├── run_data.py        # Run-data contract + orchestration evals
 │   ├── sdk.py             # Sandbox Agent SDK client
 │   ├── config.py          # Pydantic models
 │   └── coordination/      # Pluggable coordination backends

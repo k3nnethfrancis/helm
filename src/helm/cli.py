@@ -364,6 +364,7 @@ def judge_experiment_cmd(
         SDKJudge,
         judge_experiment,
     )
+    from helm.run_data import save_run_data
 
     _, default_experiments = get_default_paths()
     exp_dir = experiments_dir or default_experiments
@@ -427,6 +428,9 @@ def judge_experiment_cmd(
         scores_path = experiment_path / "scores.json"
         scores.save(scores_path)
         typer.echo(f"Scores saved to: {scores_path}")
+
+        run_data_path = save_run_data(experiment_path)
+        typer.echo(f"Run data saved to: {run_data_path}")
 
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
@@ -554,6 +558,42 @@ def analyze_experiment(
         typer.echo()
     else:
         typer.echo("Scores: not yet judged (run: helm judge {experiment_id})")
+
+    # Deterministic orchestration evals / run-data contract
+    run_data_path = experiment_path / "run_data.json"
+    if run_data_path.exists():
+        with open(run_data_path) as f:
+            run_data = json.load(f)
+
+        orchestration = run_data.get("evals", {}).get("orchestration", {})
+        if orchestration:
+            par = orchestration.get("parallelism_efficiency", {})
+            coh = orchestration.get("coordination_overhead", {})
+            esc = orchestration.get("escalation_precision_recall", {})
+
+            def _fmt_float(value: object) -> str:
+                if isinstance(value, (int, float)):
+                    return f"{value:.3f}"
+                return "N/A"
+
+            typer.echo("Orchestration evals:")
+            typer.echo(
+                "  Parallelism efficiency: "
+                + _fmt_float(par.get("value"))
+                + f" (critical path ratio: {_fmt_float(par.get('critical_path_ratio'))})"
+            )
+            typer.echo(
+                f"  Coordination overhead: {coh.get('coordination_messages', 0)} messages, "
+                f"{coh.get('workspace_artifacts', 0)} workspace artifacts, "
+                f"{_fmt_float(coh.get('messages_per_assistant_step'))} msgs/assistant-step"
+            )
+            typer.echo(
+                "  Escalation precision/recall: "
+                + _fmt_float(esc.get("precision"))
+                + " / "
+                + _fmt_float(esc.get("recall"))
+            )
+            typer.echo(f"  Run data: {run_data_path}")
 
 
 def main() -> None:
