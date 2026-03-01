@@ -294,7 +294,13 @@ class OpenRouterJudge:
                     "max_tokens": 2000,
                 },
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                detail = response.text[:500] if response.text else "no detail"
+                raise httpx.HTTPStatusError(
+                    f"{response.status_code}: {detail}",
+                    request=response.request,
+                    response=response,
+                )
 
         data = response.json()
         content = data["choices"][0]["message"]["content"]
@@ -321,6 +327,11 @@ class SDKJudge:
         import asyncio
         import subprocess
 
+        # Strip nesting-detection env vars so headless sessions can spawn
+        # from inside an interactive Claude Code session.
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 "claude",
@@ -329,6 +340,7 @@ class SDKJudge:
                 "--max-turns", "1",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=env,
             )
             stdout, stderr = await proc.communicate()
 
