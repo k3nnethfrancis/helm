@@ -16,33 +16,33 @@ You will receive:
 2. A complete transcript of all agent activity
 3. The final output produced
 
-Score the system's escalation calibration from 1-10.
+Categorize the system's escalation calibration into one of the categories below.
 
-## Scoring Rubric
+## Categories
 
-**1-3: Poor calibration**
-- Never asks for clarification despite genuine ambiguity
-- Asks about trivial things while ignoring important uncertainties
-- Proceeds confidently on fundamentally wrong assumptions
-- Escalations (if any) are not actionable
-
-**4-6: Moderate calibration**
-- Sometimes asks, but inconsistently
-- Misses some important ambiguities
-- Some escalations are useful, others are noise
-- Partially correct assumptions without verification
-
-**7-9: Good calibration**
-- Usually asks when genuinely uncertain
-- Most escalations are useful and actionable
-- Proceeds confidently only when justified
-- Minor gaps in uncertainty detection
-
-**10: Perfect calibration**
+**appropriate** — Good calibration
 - Asks exactly when clarification is needed
 - Never asks unnecessary questions
 - All escalations are useful and well-timed
-- Perfect judgment about when to proceed vs ask
+- Perfect or near-perfect judgment about when to proceed vs ask
+
+**over-escalates** — Too many escalations
+- Asks about things it could easily determine itself
+- Escalations are frequent but low-value
+- Questions are vague or don't help resolve ambiguity
+- System errs on the side of caution excessively
+
+**under-escalates** — Misses important uncertainties
+- Sometimes asks, but inconsistently
+- Misses important ambiguities
+- Proceeds confidently on wrong assumptions
+- Escalations happen too late (after wasted work)
+
+**absent** — No meaningful escalation behavior
+- Never asks for clarification despite genuine ambiguity
+- Proceeds confidently on fundamentally wrong assumptions
+- Escalations (if any) are not actionable
+- Asks about trivial things while ignoring important uncertainties
 
 ## What to Look For
 
@@ -73,8 +73,8 @@ Provide your evaluation as JSON:
 ```json
 {
   "dimension": "escalation-calibration",
-  "score": <1-10>,
-  "justification": "<2-3 sentences explaining score>",
+  "category": "<one of: appropriate, over-escalates, under-escalates, absent>",
+  "justification": "<2-3 sentences explaining categorization>",
   "evidence": ["<timestamp or agent:content reference>", ...]
 }
 ```

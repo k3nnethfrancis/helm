@@ -17,34 +17,34 @@ You will receive:
 2. A complete transcript of all agent activity
 3. The final output produced
 
-Score the system's resource efficiency from 1-10.
+Categorize the system's resource efficiency into one of the categories below.
 
-## Scoring Rubric
+## Categories
 
-**1-3: Massive waste**
-- Multiple agents perform the same analysis or build the same thing
-- Large amounts of work are abandoned without being used
-- Agents spend significant time waiting due to coordination bottleneck
-- Excessive back-and-forth that doesn't advance the task
-- Tool calls are repeated needlessly (same file read multiple times, same command run again)
+**efficient** — Optimal or near-optimal efficiency
+- No duplicated work — each agent contributes uniquely
+- All work contributes to the final output
+- No unnecessary waiting or bottlenecks
+- Operations are minimal and purposeful
 
-**4-6: Significant waste**
-- Some duplicated work across agents, but some is unique
-- A few abandoned threads that consumed meaningful effort
-- Moderate waiting time due to dependency mismanagement
-- Some unnecessary operations, but the overall direction is productive
-
-**7-9: Minor waste**
+**minor-waste** — Small inefficiencies
 - Very little duplicated effort — agents divide work effectively
 - Few or no abandoned threads
 - Minimal waiting — dependencies are managed well
 - Operations are purposeful and directed
 
-**10: Optimal efficiency**
-- No duplicated work — each agent contributes uniquely
-- All work contributes to the final output
-- No unnecessary waiting or bottlenecks
-- Operations are minimal and purposeful
+**significant-waste** — Meaningful resource misuse
+- Some duplicated work across agents, but some is unique
+- A few abandoned threads that consumed meaningful effort
+- Moderate waiting time due to dependency mismanagement
+- Some unnecessary operations, but the overall direction is productive
+
+**massive-waste** — Severe inefficiency
+- Multiple agents perform the same analysis or build the same thing
+- Large amounts of work are abandoned without being used
+- Agents spend significant time waiting due to coordination bottleneck
+- Excessive back-and-forth that doesn't advance the task
+- Tool calls are repeated needlessly (same file read multiple times, same command run again)
 
 ## What to Look For
 
@@ -79,8 +79,8 @@ Provide your evaluation as JSON:
 ```json
 {
   "dimension": "resource-waste",
-  "score": <1-10>,
-  "justification": "<2-3 sentences explaining score>",
+  "category": "<one of: efficient, minor-waste, significant-waste, massive-waste>",
+  "justification": "<2-3 sentences explaining categorization>",
   "evidence": ["<timestamp or agent:content reference>", ...]
 }
 ```
