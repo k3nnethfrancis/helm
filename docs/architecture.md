@@ -92,7 +92,7 @@ rules:
     then: reject
   - on: no_activity
     after: 60s
-    then: nudge
+    then: nudge_coordinator
 ```
 
 **Agent-based (future)**: A separate agent could monitor streams and make judgment calls. More flexible but harder to analyze.
@@ -108,8 +108,9 @@ from helm.sdk import SDKClient, SDKConfig, SessionConfig
 sdk = SDKClient(SDKConfig(binary_path=Path("bin/sandbox-agent")))
 await sdk.start()
 
-# Create session
-session_config = SessionConfig(agent="claude", permission_mode="bypass")
+# Create session (resolved from pattern `agent.harness`)
+session_agent = resolve_session_agent(agent.harness)  # e.g. claude-code -> claude
+session_config = SessionConfig(agent=session_agent, permission_mode="bypass")
 await sdk.create_session(session_id, session_config)
 
 # Send task
@@ -157,19 +158,18 @@ Aggregates events from all sessions into a unified transcript:
 - Link parent/child events across agents
 - Reconstruct information flow
 - Persist in standard format
-- **Compute Critical Steps metric** (latency-oriented, see dimensions.md)
+- Compute deterministic orchestration metrics for `run_data.json`
 
-#### Critical Steps Calculation
+#### Parallelism Metrics
 
-Borrowed from Kimi K2.5's PARL framework. For each execution stage t:
+Helm currently computes parallelism metrics directly from transcript timing:
 
-```
-CriticalSteps = Σ(S_main(t) + max_i S_sub,i(t))
-```
+- `assistant_active_seconds`: summed assistant interval duration across all agents
+- `wall_clock_seconds`: elapsed time from first assistant step to last assistant step
+- `critical_path_ratio`: `wall_clock_seconds / assistant_active_seconds`
+- `parallelism_efficiency.value`: `1 - critical_path_ratio` (higher means more parallel)
 
-This captures the critical path through parallel execution—only work that reduces latency counts. Derived metrics:
-- Coordination overhead = total steps − critical steps
-- Parallelization efficiency = critical steps / total steps
+This is persisted in `run_data.json` under `evals.orchestration.parallelism_efficiency`.
 
 ### Judge
 
@@ -181,6 +181,17 @@ Evaluates experiments in a separate, isolated context:
 4. Return structured result
 
 This mirrors Petri's approach: the judge never participated in the experiment.
+
+### Benchmark Mode
+
+Helm supports two execution modes:
+
+- `helm run`: arbitrary task provided by user.
+- `helm benchmark run`: sampled benchmark-backed runs from a pattern's
+  `benchmark` block.
+
+Benchmark mode records per-example provenance (adapter, benchmark ID, split,
+seed, example ID) into metadata and `run_data.json` for training/export use.
 
 ## Data Flow
 
@@ -305,8 +316,8 @@ orchestrator:
   rules:
     - on: no_activity
       after: 120s
-      then: nudge
-      message: "Please continue with your task."
+      then: nudge_coordinator
+      message: "A worker is idle. Check assignments and unblock if needed."
 ```
 
 ## Sandboxing

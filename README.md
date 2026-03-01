@@ -123,6 +123,9 @@ Each run now writes a versioned `run_data.json` artifact alongside
 `metadata.json`, transcripts, and scores. This is the stable contract for
 batch analysis and training data export.
 
+If `helm judge` is called without `--dimensions`, Helm now defaults to the
+experiment's configured `evaluation.dimensions` from `metadata.json`.
+
 ### Define Your Own Experiment
 
 Experiments are YAML configs that specify agents, coordination topology, orchestrator rules, and evaluation dimensions. See `patterns/` for examples.
@@ -156,11 +159,91 @@ evaluation:
   dimensions:
     - goal-drift
     - resource-waste
+  judge:
+    backend: sdk
 
 limits:
   max_duration: 20m
   max_turns_per_agent: 30
 ```
+
+`agents[].harness` is now used at runtime to resolve the SDK session agent
+(for example `claude-code -> claude`, `codex -> codex`, `opencode -> opencode`).
+
+Judge backends:
+
+- `sdk` (default) uses Claude Code headless.
+- `openrouter` uses OpenRouter API and `judge.model`.
+
+### Benchmark Adapter Scaffolding
+
+Helm now includes adapter scaffolding for benchmark-backed tasks:
+
+- `swebench` (`SWE-bench` style JSONL)
+- `tau-bench` (`tau-bench` style JSONL)
+
+Use the benchmark CLI to inspect configured datasets:
+
+```bash
+# list installed adapter names
+helm benchmark adapters
+
+# preview normalized examples for a pattern's benchmark block
+helm benchmark preview patterns/benchmark-swebench-template.yaml -n 5
+
+# run sampled benchmark experiments (without full-suite run)
+helm benchmark run patterns/benchmark-swebench-template.yaml -n 3
+
+# generate a baseline table from the sampled run summary
+helm benchmark report experiments/benchmark-runs/<summary>.json
+
+# export sampled runs to training JSONL (task/response/reward/provenance)
+helm benchmark export experiments/benchmark-runs/<summary>.json
+
+# convert exported rows into orchestration-policy dataset rows
+helm benchmark export-orchestration experiments/exports/<name>.train.jsonl
+
+# readiness check before Prime RL launch
+helm readiness --summary experiments/benchmark-runs/<summary>.json
+```
+
+`helm run` remains the arbitrary-task path. `helm benchmark run` is the
+benchmark/eval sampling path.
+
+Sampled benchmark batches also write a summary file under:
+
+- `experiments/benchmark-runs/<pattern>-<timestamp>.json`
+
+Per-run benchmark provenance is persisted in:
+
+- `metadata.json` (`benchmark` and `run.benchmark`)
+- `run_data.json` (`provenance.benchmark`, `experiment.benchmark`, `run.benchmark`)
+
+Benchmark run verification:
+
+- Default mode is `completion` (pass/fail on completion signals).
+- In `completion` mode, agent prompts should explicitly write
+  `coordination/signals/done` on success.
+- For benchmark-native scoring, set `benchmark.verifier.mode: command` and provide
+  `benchmark.verifier.command` to run your scorer script per example.
+- Command templates can use placeholders:
+  `{experiment_dir}`, `{dataset_path}`, `{benchmark_id}`, `{adapter}`, `{example_id}`, `{split}`.
+- A starter verifier script is included:
+  `scripts/verify_dataset_contract.py` (uses dataset row assertions such as
+  `expected_files`, `must_contain`, `must_not_contain`).
+
+Template patterns are included at:
+
+- `patterns/benchmark-swebench-template.yaml`
+- `patterns/benchmark-tau-bench-template.yaml`
+
+Prime RL handoff artifacts:
+
+- Runbook: `docs/prime-rl-runbook.md`
+- Config starter: `configs/prime/rl.template.toml`
+- Helm-native policy env guide: `docs/helm-orchestration-policy-env.md`
+- Terminal continuity handoff: `docs/AGENT_HANDOFF.md`
+- Terminal auth preflight: `scripts/prime_terminal_preflight.sh`
 
 ## Included Experiment Patterns
 
@@ -171,6 +254,8 @@ limits:
 | `experiment-peer-adversarial-data.yaml` | Peer network | 3 | Failure suppression under corrupted data |
 | `experiment-peer-constraint-puzzle.yaml` | Peer network | 3 | Negotiation under conflicting constraints |
 | `experiment-hub-spoke-parallel-build.yaml` | Hub-spoke | 5 | Scale effects, dependency discovery, hub bottleneck |
+| `benchmark-swebench-template.yaml` | Template | 1 | SWE-bench adapter scaffolding + provenance fields |
+| `benchmark-tau-bench-template.yaml` | Template | 1 | tau-bench adapter scaffolding + provenance fields |
 
 ## Example Results
 

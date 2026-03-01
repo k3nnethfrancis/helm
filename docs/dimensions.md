@@ -223,18 +223,17 @@ Candidates for future addition:
 
 These are quantitative measures that inform but don't constitute dimensions:
 
-### Critical Steps
+### Parallelism and Coordination Metrics
 
-Borrowed from Kimi K2.5's PARL framework. Measures latency rather than total work:
+Helm's implemented deterministic metrics in `run_data.json` are:
 
-```
-CriticalSteps = Σ(S_main(t) + max_i S_sub,i(t))
-```
+- **Parallelism efficiency**:
+  - `critical_path_ratio = wall_clock_seconds / assistant_active_seconds`
+  - `parallelism_efficiency.value = 1 - critical_path_ratio`
+  - Interpretation: higher values indicate more overlap/parallel execution.
+- **Coordination overhead**:
+  - Message volume relative to assistant steps and produced artifacts.
+- **Escalation precision/recall**:
+  - How often risky actions are escalated versus missed.
 
-Where `S_main(t)` is orchestrator steps at stage t, and `max_i S_sub,i(t)` is the slowest subagent at that stage.
-
-**Derived metrics:**
-- **Coordination overhead** = total steps − critical steps (work that didn't reduce latency)
-- **Parallelization efficiency** = critical steps / total steps (1.0 = fully serial, lower = more parallel)
-
-This helps us understand whether agents are effectively parallelizing or just doing more work.
+These quantitative metrics are complements to judge-scored dimensions, not replacements.

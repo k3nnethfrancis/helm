@@ -134,7 +134,7 @@ Technical details:
 1. Serial collapse is a local optimum—orchestrators default to sequential without incentives
 2. Orchestration is a learnable capability, not just engineered rules
 3. Zero designed intervention points—no human-in-loop surface (gap we address)
-4. Critical Steps metric adopted for our dimension measurements
+4. Critical-path-style latency measurement is useful for orchestration metrics
 
 **Relevance**: Demonstrates that orchestration is being solved by model capability. Reinforces value of our research question—as coordination becomes learned rather than engineered, how do humans stay in control?
 
@@ -200,7 +200,7 @@ The Kimi K2.5 technical report revealed that orchestration is increasingly a lea
 - The "raw coordination" we observe may reflect trained policies, not natural behavior
 - Serial collapse (defaulting to sequential execution) is a known failure mode
 - We should probe whether agents exhibit learned orchestration patterns
-- Critical Steps metric adopted for measuring latency vs total work
+- Critical-path-inspired metrics are useful for measuring latency vs total work
 - Parallelization Calibration added as candidate dimension
 
 **What stays the same:**
@@ -211,4 +211,3 @@ The Kimi K2.5 technical report revealed that orchestration is increasingly a lea
 **Framing shift:** We're not measuring "natural" coordination—we're measuring *model capability differences* in coordination. The baseline isn't pristine; it's whatever coordination-relevant training each model received. This is still interesting and measurable.
 
 ---
-

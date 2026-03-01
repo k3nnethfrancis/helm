@@ -23,6 +23,8 @@ Current schema version: `helm.run_data.v1`
   "schema_version": "helm.run_data.v1",
   "generated_at": "ISO-8601 timestamp",
   "experiment": { "...": "..." },
+  "provenance": { "...benchmark provenance..." },
+  "config": { "...resolved config metadata..." },
   "run": { "...": "..." },
   "agents": [ "...agent metadata..." ],
   "limits": { "...": "..." },
@@ -58,7 +60,42 @@ These are computed automatically from transcript + metadata:
    - `precision`
    - `recall`
 
+4. `intervention_profile`
+   - `total_interventions`
+   - `by_action` (approve/reject/escalate/log/nudge buckets)
+   - `by_event_type`
+   - `by_agent`
+
 Notes:
 
 - Risky actions are inferred from `limits.blocked_commands` plus common network command heuristics.
 - Some metrics can be `null` when denominator events are absent (for example no escalations or no risky requests).
+- `run.interventions` is copied directly from runtime-guard logs and is intended as
+  a training-label trace for orchestration policy learning.
+- `run.orchestration_policy_trace` provides a canonical event stream for
+  orchestration learning with:
+  - `events`: normalized intervention/escalation events
+  - `summary.by_action`, `summary.by_action_family`, `summary.by_source`,
+    `summary.by_agent`
+- Optional task verifier outputs are normalized into `run.task_verification`
+  and referenced from `artifacts.task_verification`.
+- Benchmark provenance (`benchmark`, `example`, `seed`) is normalized into
+  both `provenance.benchmark` and `experiment.benchmark` for training/export
+  pipelines.
+- Run-level benchmark selection metadata is available under `run.benchmark`
+  for sampled benchmark batches.
+- Benchmark verifier mode (for example `completion` or `command`) is stored
+  in benchmark provenance where available.
+
+## Benchmark metadata fields
+
+When a run comes from `helm benchmark run`, the contract includes:
+
+- `config.benchmark` — benchmark block resolved from pattern config.
+- `experiment.benchmark` — normalized benchmark provenance for the run.
+- `provenance.benchmark` — same normalized provenance for downstream exporters.
+- `run.benchmark` — run-time benchmark selection details (including selected example).
+- `run.task_verification` — normalized verification result generated during
+  benchmark execution.
+  - `completion` mode: verification mirrors run completion success/failure.
+  - `command` mode: verification comes from external scorer command output/exit code.
