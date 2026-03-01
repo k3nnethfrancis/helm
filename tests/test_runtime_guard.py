@@ -93,3 +93,33 @@ def test_nudge_coordinator_targets_hub_session() -> None:
     asyncio.run(orchestrator._apply_rule(rule, _event("no_activity"), worker_state))
 
     assert sdk.messages == [("s-hub", "check status")]
+
+
+def test_interventions_payload_is_json_serializable_shape() -> None:
+    rule = OrchestratorRule(
+        on="permission.requested",
+        if_condition='action contains "curl"',
+        then=OrchestratorAction.LOG,
+        reason="track network calls",
+    )
+    orchestrator = RuntimeGuard(OrchestratorConfig(rules=[rule]), DummySDK())
+    orchestrator.register_agent("worker-a", "s-worker", role="worker")
+
+    asyncio.run(
+        orchestrator.handle_event(
+            "s-worker",
+            _event(
+                "permission.requested",
+                permission_id="p1",
+                action="curl https://example.com",
+            ),
+        )
+    )
+
+    payload = orchestrator.get_interventions_payload()
+
+    assert len(payload) == 1
+    assert payload[0]["agent_id"] == "worker-a"
+    assert payload[0]["action_taken"] == "log"
+    assert payload[0]["event_type"] == "permission.requested"
+    assert payload[0]["rule"]["reason"] == "track network calls"

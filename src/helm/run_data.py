@@ -131,6 +131,250 @@ def _workspace_artifact_count(experiment_dir: Path) -> int:
     return sum(1 for p in workspace.rglob("*") if p.is_file())
 
 
+def _extract_interventions(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    run_info = metadata.get("run", {})
+    if not isinstance(run_info, dict):
+        return []
+    interventions = run_info.get("interventions", [])
+    if not isinstance(interventions, list):
+        return []
+    return [i for i in interventions if isinstance(i, dict)]
+
+
+def _policy_action_family(action: Any) -> str:
+    if not isinstance(action, str):
+        return "other"
+
+    normalized = action.strip().lower()
+    if normalized in {"approve", "reject", "log"}:
+        return normalized
+    if normalized in {"nudge", "nudge_coordinator"}:
+        return "nudge"
+    if normalized in {"escalate", "escalate_to_human"}:
+        return "escalate"
+    return "other"
+
+
+def _build_orchestration_policy_trace(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Build canonical policy-trace events from runtime interventions/escalations."""
+    run = metadata.get("run", {})
+    if not isinstance(run, dict):
+        run = {}
+
+    interventions = _extract_interventions(metadata)
+    escalations = run.get("escalations", [])
+    if not isinstance(escalations, list):
+        escalations = []
+
+    events: list[dict[str, Any]] = []
+
+    for intervention in interventions:
+        event_data = intervention.get("event_data", {})
+        if not isinstance(event_data, dict):
+            event_data = {}
+
+        rule = intervention.get("rule", {})
+        if not isinstance(rule, dict):
+            rule = {}
+
+        details = intervention.get("details", {})
+        if not isinstance(details, dict):
+            details = {}
+
+        action = intervention.get("action_taken")
+        events.append(
+            {
+                "timestamp": intervention.get("timestamp"),
+                "source": "runtime_guard",
+                "agent_id": intervention.get("agent_id"),
+                "trigger_event_type": intervention.get("event_type"),
+                "action": action,
+                "action_family": _policy_action_family(action),
+                "reason": rule.get("reason"),
+                "rule": rule,
+                "target_agent_id": details.get("target_agent_id"),
+                "permission_id": event_data.get("permission_id"),
+                "requested_action": event_data.get("action"),
+            }
+        )
+
+    for escalation in escalations:
+        if not isinstance(escalation, dict):
+            continue
+        event_data = escalation.get("event_data", {})
+        if not isinstance(event_data, dict):
+            event_data = {}
+
+        action = escalation.get("action_taken") or "escalate_to_human"
+        events.append(
+            {
+                "timestamp": escalation.get("timestamp"),
+                "source": "experiment_escalation",
+                "agent_id": escalation.get("agent_id"),
+                "trigger_event_type": escalation.get("event_type"),
+                "action": action,
+                "action_family": _policy_action_family(action),
+                "reason": escalation.get("reason"),
+                "rule": None,
+                "target_agent_id": None,
+                "permission_id": event_data.get("permission_id"),
+                "requested_action": event_data.get("action"),
+            }
+        )
+
+    # Stable ordering: known timestamps first, then unknown, preserving insertion.
+    indexed_events = list(enumerate(events))
+    indexed_events.sort(
+        key=lambda item: (
+            _parse_ts(item[1].get("timestamp")) is None,
+            item[1].get("timestamp") or "",
+            item[0],
+        )
+    )
+    ordered_events = [event for _, event in indexed_events]
+
+    by_action: dict[str, int] = {}
+    by_action_family: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    by_agent: dict[str, int] = {}
+    for event in ordered_events:
+        action = event.get("action")
+        if isinstance(action, str) and action:
+            by_action[action] = by_action.get(action, 0) + 1
+
+        family = event.get("action_family")
+        if isinstance(family, str) and family:
+            by_action_family[family] = by_action_family.get(family, 0) + 1
+
+        source = event.get("source")
+        if isinstance(source, str) and source:
+            by_source[source] = by_source.get(source, 0) + 1
+
+        agent_id = event.get("agent_id")
+        if isinstance(agent_id, str) and agent_id:
+            by_agent[agent_id] = by_agent.get(agent_id, 0) + 1
+
+    return {
+        "events": ordered_events,
+        "summary": {
+            "total_events": len(ordered_events),
+            "by_action": by_action,
+            "by_action_family": by_action_family,
+            "by_source": by_source,
+            "by_agent": by_agent,
+        },
+    }
+
+
+def _extract_benchmark_provenance(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    benchmark = metadata.get("benchmark", {})
+    if not isinstance(benchmark, dict):
+        benchmark = {}
+
+    run = metadata.get("run", {})
+    if not isinstance(run, dict):
+        run = {}
+    run_benchmark = run.get("benchmark", {})
+    if not isinstance(run_benchmark, dict):
+        run_benchmark = {}
+
+    adapter = run_benchmark.get("adapter") or benchmark.get("adapter")
+    benchmark_id = run_benchmark.get("benchmark_id") or benchmark.get("id")
+    split = run_benchmark.get("split") or benchmark.get("split")
+    seed = run_benchmark.get("seed")
+    if seed is None:
+        seed = benchmark.get("seed")
+    verifier_mode = run_benchmark.get("verifier_mode")
+    if verifier_mode is None:
+        verifier = benchmark.get("verifier", {})
+        if isinstance(verifier, dict):
+            verifier_mode = verifier.get("mode")
+
+    example_id = run_benchmark.get("selected_example_id") or benchmark.get("example_id")
+    example_ids = run_benchmark.get("configured_example_ids")
+    if not isinstance(example_ids, list):
+        example_ids = benchmark.get("example_ids", [])
+    if not isinstance(example_ids, list):
+        example_ids = []
+
+    if not any(
+        value is not None and value != []
+        for value in (
+            adapter,
+            benchmark_id,
+            split,
+            seed,
+            verifier_mode,
+            example_id,
+            example_ids,
+        )
+    ):
+        return None
+
+    return {
+        "adapter": adapter,
+        "benchmark_id": benchmark_id,
+        "dataset_path": benchmark.get("dataset_path"),
+        "split": split,
+        "seed": seed,
+        "verifier_mode": verifier_mode,
+        "example_id": example_id,
+        "example_ids": [str(example) for example in example_ids],
+    }
+
+
+def _load_task_verification(
+    experiment_dir: Path,
+    metadata: dict[str, Any],
+) -> tuple[dict[str, Any], str | None]:
+    """Load optional task verification artifact and normalize shape."""
+    run = metadata.get("run", {})
+    if not isinstance(run, dict):
+        run = {}
+
+    candidate_paths: list[Path] = []
+    configured_path = run.get("task_verification_path")
+    if isinstance(configured_path, str) and configured_path.strip():
+        candidate_paths.append(experiment_dir / configured_path)
+
+    candidate_paths.extend(
+        [
+            experiment_dir / "task_verification.json",
+            experiment_dir / "evaluation" / "task_verification.json",
+        ]
+    )
+
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        payload = _load_json(path)
+        if not payload:
+            continue
+        try:
+            artifact_path = str(path.relative_to(experiment_dir))
+        except ValueError:
+            artifact_path = str(path)
+        return (
+            {
+                "status": payload.get("status", "unknown"),
+                "score": payload.get("score"),
+                "reason": payload.get("reason"),
+                "details": payload.get("details", {}),
+            },
+            artifact_path,
+        )
+
+    return (
+        {
+            "status": "unknown",
+            "score": None,
+            "reason": None,
+            "details": {},
+        },
+        None,
+    )
+
+
 def _safe_ratio(numerator: float, denominator: float) -> float | None:
     if denominator <= 0:
         return None
@@ -235,6 +479,23 @@ def compute_orchestration_evals(
     precision = _safe_ratio(float(escalations_on_risky), float(escalations_total))
     recall = _safe_ratio(float(escalations_on_risky), float(risky_permission_requests))
 
+    interventions = _extract_interventions(metadata)
+    by_action: dict[str, int] = {}
+    by_event_type: dict[str, int] = {}
+    by_agent: dict[str, int] = {}
+    for intervention in interventions:
+        action = intervention.get("action_taken")
+        if isinstance(action, str) and action:
+            by_action[action] = by_action.get(action, 0) + 1
+
+        event_type = intervention.get("event_type")
+        if isinstance(event_type, str) and event_type:
+            by_event_type[event_type] = by_event_type.get(event_type, 0) + 1
+
+        agent_id = intervention.get("agent_id")
+        if isinstance(agent_id, str) and agent_id:
+            by_agent[agent_id] = by_agent.get(agent_id, 0) + 1
+
     return {
         "parallelism_efficiency": {
             "value": parallelism_efficiency,
@@ -261,6 +522,12 @@ def compute_orchestration_evals(
             "precision": precision,
             "recall": recall,
         },
+        "intervention_profile": {
+            "total_interventions": len(interventions),
+            "by_action": by_action,
+            "by_event_type": by_event_type,
+            "by_agent": by_agent,
+        },
     }
 
 
@@ -274,6 +541,12 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
     metadata = _load_json(metadata_path)
     transcript = _load_json(transcript_path)
     scores = _load_json(scores_path)
+    benchmark_provenance = _extract_benchmark_provenance(metadata)
+    task_verification, task_verification_artifact = _load_task_verification(
+        experiment_dir=experiment_dir,
+        metadata=metadata,
+    )
+    policy_trace = _build_orchestration_policy_trace(metadata)
 
     run = metadata.get("run", {})
     if not isinstance(run, dict):
@@ -303,14 +576,23 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
     judge_scores = None
     if scores:
         score_map: dict[str, Any] = {}
+        scores_schema = scores.get("schema_version", "v1")
         for score in scores.get("scores", []):
             if not isinstance(score, dict):
                 continue
             dimension = score.get("dimension")
-            if isinstance(dimension, str):
+            if not isinstance(dimension, str):
+                continue
+            if "category" in score:
+                score_map[dimension] = {
+                    "category": score["category"],
+                    "severity": score.get("severity"),
+                }
+            else:
                 score_map[dimension] = score.get("score")
 
         judge_scores = {
+            "schema_version": scores_schema,
             "backend": scores.get("judge_backend"),
             "model": scores.get("judge_model"),
             "scores": score_map,
@@ -335,6 +617,16 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
             "pattern": metadata.get("pattern"),
             "created_at": metadata.get("created_at"),
             "task": metadata.get("task"),
+            "benchmark": benchmark_provenance,
+        },
+        "provenance": {
+            "benchmark": benchmark_provenance,
+        },
+        "config": {
+            "evaluation": metadata.get("evaluation"),
+            "orchestrator": metadata.get("orchestrator"),
+            "coordination": metadata.get("coordination"),
+            "benchmark": metadata.get("benchmark"),
         },
         "run": {
             "success": run.get("success"),
@@ -342,8 +634,12 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
             "end_time": run.get("end_time"),
             "duration_seconds": run.get("duration_seconds"),
             "error": run.get("error"),
+            "benchmark": run.get("benchmark"),
+            "task_verification": task_verification,
             "agent_stats": run.get("agent_stats", {}),
             "escalations": run.get("escalations", []),
+            "interventions": run.get("interventions", []),
+            "orchestration_policy_trace": policy_trace,
             "stream_errors": run.get("stream_errors", {}),
         },
         "agents": agents,
@@ -355,6 +651,7 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
             "transcript_json": str(transcript_path.relative_to(experiment_dir)) if transcript_path.exists() else None,
             "transcript_markdown": str(transcript_md_path.relative_to(experiment_dir)) if transcript_md_path.exists() else None,
             "scores": str(scores_path.relative_to(experiment_dir)) if scores_path.exists() else None,
+            "task_verification": task_verification_artifact,
         },
     }
 

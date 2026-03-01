@@ -157,9 +157,7 @@ evaluation:
     - failure-suppression
 
   judge:
-    harness: claude-code
-    model: claude-sonnet-4
-    separate_context: true
+    backend: sdk
 
 limits:
   max_duration: 20m

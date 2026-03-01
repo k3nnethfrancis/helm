@@ -123,6 +123,63 @@ class EvaluationConfig(BaseModel):
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
 
 
+class BenchmarkConfig(BaseModel):
+    """Configuration for benchmark-backed experiment tasks."""
+
+    adapter: str
+    dataset_path: str
+    benchmark_id: str | None = Field(None, alias="id")
+    split: str | None = None
+    seed: int | None = None
+    example_id: str | None = None
+    example_ids: list[str] = Field(default_factory=list)
+    max_examples: int | None = None
+    verifier: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"populate_by_name": True}
+
+    def selected_example_ids(self) -> list[str]:
+        """Return de-duplicated configured example IDs in priority order."""
+        ordered: list[str] = []
+        if self.example_id:
+            ordered.append(self.example_id)
+        ordered.extend(self.example_ids)
+
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for example_id in ordered:
+            if example_id in seen:
+                continue
+            deduped.append(example_id)
+            seen.add(example_id)
+        return deduped
+
+    def verifier_mode(self) -> str:
+        """Return verifier mode (defaults to completion)."""
+        mode = self.verifier.get("mode", "completion")
+        if isinstance(mode, str):
+            return mode.strip().lower() or "completion"
+        return "completion"
+
+    def verifier_command(self) -> str | None:
+        """Return optional verifier command string."""
+        command = self.verifier.get("command")
+        if isinstance(command, str) and command.strip():
+            return command.strip()
+        return None
+
+    def verifier_pass_exit_codes(self) -> list[int]:
+        """Return list of command exit codes treated as success."""
+        raw = self.verifier.get("pass_exit_codes", [0])
+        if not isinstance(raw, list):
+            return [0]
+        out: list[int] = []
+        for item in raw:
+            if isinstance(item, int):
+                out.append(item)
+        return out if out else [0]
+
+
 class LimitsConfig(BaseModel):
     """Resource limits for the experiment."""
 
@@ -194,6 +251,7 @@ class ExperimentConfig(BaseModel):
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
     coordination: CoordinationConfig = Field(default_factory=CoordinationConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    benchmark: BenchmarkConfig | None = None
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     metadata: ExperimentMetadata = Field(default_factory=ExperimentMetadata)
 

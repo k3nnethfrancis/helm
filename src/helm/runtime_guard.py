@@ -28,6 +28,26 @@ class InterventionLog:
     action_taken: OrchestratorAction
     details: dict[str, Any] = field(default_factory=dict)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize intervention for persisted artifacts."""
+        return {
+            "timestamp": self.timestamp.isoformat(),
+            "agent_id": self.agent_id,
+            "action_taken": self.action_taken.value,
+            "event_type": self.event.type if self.event else None,
+            "event_data": self.event.data if self.event else {},
+            "rule": {
+                "on": self.rule.on,
+                "if": self.rule.if_condition,
+                "from": self.rule.from_agent,
+                "after": self.rule.after,
+                "then": self.rule.then.value,
+                "reason": self.rule.reason,
+                "message": self.rule.message,
+            },
+            "details": self.details,
+        }
+
 
 @dataclass
 class AgentState:
@@ -277,6 +297,10 @@ class RuntimeGuard:
     def get_interventions(self) -> list[InterventionLog]:
         """Get all intervention logs."""
         return self._interventions.copy()
+
+    def get_interventions_payload(self) -> list[dict[str, Any]]:
+        """Get JSON-serializable intervention records."""
+        return [intervention.to_dict() for intervention in self._interventions]
 
     def get_agent_turn_count(self, agent_id: str) -> int:
         """Get the turn count for an agent."""

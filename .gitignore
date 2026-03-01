@@ -32,3 +32,6 @@ plan.md
 /workspace/
 helm-architecture-playground.html
 scripts/spike-*
+
+# Eval output artifacts
+outputs/

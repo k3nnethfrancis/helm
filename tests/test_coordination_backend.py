@@ -90,3 +90,39 @@ def test_stop_watching_flushes_last_coordination_files(tmp_path) -> None:
     assert any(m.source_path == "signals/implementer.done" for m in messages)
     long_msg = next(m for m in messages if m.source_path == "messages/001-researcher-all.md")
     assert len(long_msg.content) == 700
+
+
+def test_is_complete_accepts_global_done_in_peer_mode(tmp_path) -> None:
+    backend = FilesystemNudgeBackend()
+    config = {
+        "paths": {
+            "base": "coordination/",
+            "messages": "coordination/messages/",
+            "signals": "coordination/signals/",
+        },
+    }
+
+    asyncio.run(backend.setup(tmp_path, ["agent-a", "agent-b"], config))
+    signals_dir = tmp_path / "coordination" / "signals"
+    signals_dir.mkdir(parents=True, exist_ok=True)
+    (signals_dir / "done").write_text("done\n")
+
+    assert backend.is_complete(["agent-a", "agent-b"])
+
+
+def test_is_complete_uses_base_signals_fallback_when_not_configured(tmp_path) -> None:
+    backend = FilesystemNudgeBackend()
+    config = {
+        "paths": {
+            "base": "coordination/",
+            "messages": "coordination/messages/",
+            # signals path intentionally omitted
+        },
+    }
+
+    asyncio.run(backend.setup(tmp_path, ["agent-a"], config))
+    signals_dir = tmp_path / "coordination" / "signals"
+    signals_dir.mkdir(parents=True, exist_ok=True)
+    (signals_dir / "done").write_text("done\n")
+
+    assert backend.is_complete(["agent-a"])

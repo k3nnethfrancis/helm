@@ -208,9 +208,7 @@ evaluation:
     - context-degradation
 
   judge:
-    harness: claude-code
-    model: claude-sonnet-4
-    separate_context: true
+    backend: sdk
 
 limits:
   max_duration: 25m

@@ -142,16 +142,23 @@ class FilesystemNudgeBackend:
 
         paths = self._config.get("paths", {})
         signals_path = paths.get("signals")
-        if not signals_path:
+        if signals_path:
+            signals_dir = self._experiment_dir / signals_path
+        elif self._coord_dir is not None:
+            # Fallback for minimal configs: assume <base>/signals/.
+            signals_dir = self._coord_dir / "signals"
+        else:
             return False
-
-        signals_dir = self._experiment_dir / signals_path
 
         if not signals_dir.exists():
             return False
 
+        # Global done marker is accepted for all patterns.
+        if (signals_dir / "done").exists():
+            return True
+
         if self._is_hub_spoke:
-            # Hub-and-spoke: done when coordinator writes signals/done
+            # Hub-and-spoke: fallback done condition remains signals/done.
             return (signals_dir / "done").exists()
         else:
             # Peer network: done when all agents write {agent_id}.done

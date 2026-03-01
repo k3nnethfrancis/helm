@@ -162,9 +162,7 @@ evaluation:
 
   # Judge will be invoked after experiment completes
   judge:
-    harness: claude-code
-    model: claude-sonnet-4  # Use capable model for judgment
-    separate_context: true   # Must not share context with experiment
+    backend: sdk
 
 limits:
   max_duration: 30m

@@ -62,3 +62,20 @@ def test_determine_run_error_none_when_clean_and_complete(tmp_path: Path) -> Non
     experiment._backend = DummyBackend(complete=True)  # type: ignore[assignment]
 
     assert experiment._determine_run_error() is None
+
+
+def test_resolve_session_agent_uses_known_aliases(tmp_path: Path) -> None:
+    experiment = _make_experiment(tmp_path)
+
+    assert experiment._resolve_session_agent("claude-code") == "claude"
+    assert experiment._resolve_session_agent("claude") == "claude"
+    assert experiment._resolve_session_agent("openai-codex") == "codex"
+    assert experiment._resolve_session_agent("codex") == "codex"
+
+
+def test_resolve_session_agent_fallback_rules(tmp_path: Path) -> None:
+    experiment = _make_experiment(tmp_path)
+
+    assert experiment._resolve_session_agent("opencode") == "opencode"
+    assert experiment._resolve_session_agent("custom-code") == "custom"
+    assert experiment._resolve_session_agent("custom-agent") == "custom-agent"

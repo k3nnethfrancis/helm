@@ -81,6 +81,36 @@ class Experiment:
             for a in config.agents
         }
 
+    def _resolve_session_agent(self, harness: str) -> str:
+        """Resolve pattern `harness` into the SDK `agent` identifier.
+
+        Helm keeps `harness` labels human-friendly (`claude-code`, etc.) while the
+        SDK expects concrete agent IDs (for example `claude`).
+        """
+        normalized = harness.strip().lower()
+        if not normalized:
+            return "claude"
+
+        aliases = {
+            "claude": "claude",
+            "claude-code": "claude",
+            "codex": "codex",
+            "openai-codex": "codex",
+            "opencode": "opencode",
+            "amp": "amp",
+        }
+        if normalized in aliases:
+            return aliases[normalized]
+
+        # Fallback: treat "*-code" as "<name>" for generic bring-your-own labels.
+        if normalized.endswith("-code"):
+            candidate = normalized[:-5]
+            if candidate:
+                return aliases.get(candidate, candidate)
+
+        # Last resort: pass through as-is and let SDK validate/accept it.
+        return normalized
+
     async def setup(self) -> None:
         """Set up the experiment environment."""
         # Create experiment-owned directories
@@ -152,8 +182,9 @@ class Experiment:
             raise RuntimeError("Experiment not initialized")
 
         session_id = f"helm-{self.experiment_id}-{agent.id}"
+        session_agent = self._resolve_session_agent(agent.harness)
         session_config = SessionConfig(
-            agent="claude",
+            agent=session_agent,
             permission_mode="bypass",
             cwd=str(self.experiment_dir),
         )
@@ -541,29 +572,84 @@ Workspace directory: {self.experiment_dir / 'workspace'}
             "experiment_name": self.config.name,
             "pattern": "hub-and-spoke" if self.config.is_hub_and_spoke() else "peer-network",
             "agents": [
-                {"id": a.id, "role": a.role.value if a.role else None}
+                {
+                    "id": a.id,
+                    "role": a.role.value if a.role else None,
+                    "harness": a.harness,
+                }
                 for a in self.config.agents
             ],
+            "evaluation": {
+                "dimensions": self.config.evaluation.dimensions,
+                "judge": self.config.evaluation.judge.model_dump(),
+            },
+            "orchestrator": {
+                "role": self.config.orchestrator.role,
+                "rules": [
+                    rule.model_dump(by_alias=True)
+                    for rule in self.config.orchestrator.rules
+                ],
+            },
+            "coordination": self.config.coordination.model_dump(),
             "limits": {
                 "max_duration": self.config.limits.max_duration,
                 "max_turns_per_agent": self.config.limits.max_turns_per_agent,
                 "max_budget_usd": self.config.limits.max_budget_usd,
+                "blocked_commands": self.config.limits.blocked_commands,
+                "workspace_files": self.config.limits.workspace_files,
             },
             "created_at": datetime.now().isoformat(),
         }
+
+        if self.config.benchmark is not None:
+            selected_example_ids = self.config.benchmark.selected_example_ids()
+            metadata["benchmark"] = {
+                "adapter": self.config.benchmark.adapter,
+                "id": self.config.benchmark.benchmark_id,
+                "dataset_path": self.config.benchmark.dataset_path,
+                "split": self.config.benchmark.split,
+                "seed": self.config.benchmark.seed,
+                "example_id": self.config.benchmark.example_id,
+                "example_ids": selected_example_ids,
+                "max_examples": self.config.benchmark.max_examples,
+                "verifier": self.config.benchmark.verifier,
+            }
 
         if self._task is not None:
             metadata["task"] = self._task
 
         if result is not None:
+            benchmark_run = None
+            if self.config.benchmark is not None:
+                selected_example_ids = self.config.benchmark.selected_example_ids()
+                benchmark_run = {
+                    "adapter": self.config.benchmark.adapter,
+                    "benchmark_id": self.config.benchmark.benchmark_id,
+                    "split": self.config.benchmark.split,
+                    "seed": self.config.benchmark.seed,
+                    "verifier_mode": self.config.benchmark.verifier_mode(),
+                    "selected_example_id": (
+                        selected_example_ids[0]
+                        if len(selected_example_ids) == 1
+                        else None
+                    ),
+                    "configured_example_ids": selected_example_ids,
+                }
+
             metadata["run"] = {
                 "success": result.success,
                 "start_time": result.start_time.isoformat(),
                 "end_time": result.end_time.isoformat(),
                 "duration_seconds": (result.end_time - result.start_time).total_seconds(),
                 "error": result.error,
+                "benchmark": benchmark_run,
                 "agent_stats": result.agent_stats,
                 "escalations": self._escalations,
+                "interventions": (
+                    self._orchestrator.get_interventions_payload()
+                    if self._orchestrator is not None
+                    else []
+                ),
                 "stream_errors": self._stream_errors,
             }
 
@@ -609,6 +695,26 @@ async def run_experiment(
 ) -> ExperimentResult:
     """Run an experiment from a config file."""
     config = ExperimentConfig.from_yaml(config_path)
+
+    return await run_experiment_with_config(
+        config=config,
+        task=task,
+        sdk_binary_path=sdk_binary_path,
+        experiments_dir=experiments_dir,
+        on_escalate=on_escalate,
+        on_turn_limit=on_turn_limit,
+    )
+
+
+async def run_experiment_with_config(
+    config: ExperimentConfig,
+    task: str,
+    sdk_binary_path: Path,
+    experiments_dir: Path,
+    on_escalate: Callable[[str, SDKEvent, Any], None] | None = None,
+    on_turn_limit: Callable[[str, int, int], tuple[str, int | None]] | None = None,
+) -> ExperimentResult:
+    """Run an experiment from an in-memory config object."""
 
     experiment = Experiment(
         config=config,
