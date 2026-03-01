@@ -1,0 +1,29 @@
+# Prime hosted RL template for Helm workflows.
+# Start from this file, then customize for your environment/model.
+
+model = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
+max_steps = 100
+
+# Training
+batch_size = 128
+rollouts_per_example = 8
+
+[sampling]
+max_tokens = 2048
+
+[[env]]
+# Replace with your published training environment slug.
+id = "owner/your-env"
+
+# Optional: online evaluation
+# [eval]
+# interval = 100
+# num_examples = -1
+# rollouts_per_example = 1
+# eval_base_model = true
+#
+# [[eval.env]]
+# id = "owner/your-eval-env"
+# num_examples = 30
+# rollouts_per_example = 4
+

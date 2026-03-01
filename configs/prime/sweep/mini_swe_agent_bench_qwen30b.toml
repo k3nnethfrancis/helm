@@ -1,0 +1,13 @@
+model = "Qwen/Qwen3-30B-A3B-Instruct-2507"
+max_steps = 3
+batch_size = 4
+rollouts_per_example = 1
+learning_rate = 1e-6
+
+[sampling]
+max_tokens = 4096
+temperature = 0.7
+
+[[env]]
+id = "primeintellect/mini-swe-agent-bench"
+args = { subset = "lite", split = "dev", step_limit = 8, timeout = 60 }

@@ -1,0 +1,25 @@
+model = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
+max_steps = 30
+
+# Conservative smoke settings for first hosted run.
+batch_size = 64
+rollouts_per_example = 8
+learning_rate = 1e-6
+
+[sampling]
+max_tokens = 1024
+temperature = 0.7
+
+[[env]]
+id = "primeintellect/wordle"
+
+[eval]
+interval = 15
+num_examples = 20
+rollouts_per_example = 1
+eval_base_model = true
+
+[[eval.env]]
+id = "primeintellect/wordle"
+num_examples = 20
+rollouts_per_example = 2
