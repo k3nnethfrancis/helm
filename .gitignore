@@ -21,8 +21,9 @@ bin/
 # Experiment run artifacts
 experiments/
 
-# Internal planning docs
+# Internal planning docs and review artifacts
 plan.md
+review.md
 
 # Claude Code
 .claude/
