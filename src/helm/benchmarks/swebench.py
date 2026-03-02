@@ -59,11 +59,21 @@ class SWEBenchAdapter:
             if not prompt:
                 continue
 
+            # Prepend repo + base_commit context so agents know the target
+            repo = _first_str(row, ("repo",))
+            base_commit = _first_str(row, ("base_commit",))
+            prompt_parts = [
+                f"Repository: {repo}" if repo else None,
+                f"Base commit: {base_commit}" if base_commit else None,
+                prompt,
+            ]
+            full_prompt = "\n\n".join([p for p in prompt_parts if p])
+
             normalized.append(
                 BenchmarkExample(
                     benchmark=self.name,
                     example_id=example_id,
-                    prompt=prompt,
+                    prompt=full_prompt,
                     metadata=row,
                 )
             )

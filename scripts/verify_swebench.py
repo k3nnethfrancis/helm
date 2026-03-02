@@ -1,0 +1,692 @@
+#!/usr/bin/env python3
+"""SWE-bench ground truth verifier.
+
+Clones the repo at base_commit, applies test_patch (adds FAIL_TO_PASS tests),
+applies the agent's patch, installs, runs tests, and reports results.
+
+Exit codes:
+- 0: resolved (all FAIL_TO_PASS pass, no PASS_TO_PASS regressions)
+- 2: fail or partial
+- 3: verifier error (setup failure, missing data, etc.)
+
+Output contract matches verify_dataset_contract.py — JSON on stdout:
+{
+  "status": "pass|fail|partial",
+  "score": 0.0-1.0,
+  "reason": "...",
+  "details": { ... }
+}
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# SWE-bench environment specs
+# ---------------------------------------------------------------------------
+# Source: https://github.com/princeton-nlp/SWE-bench/blob/main/swebench/harness/constants/python.py
+
+# (repo, version) → Python version required
+PYTHON_VERSIONS: dict[tuple[str, str], str] = {
+    # django/django
+    ("django/django", "1.4"): "3.5", ("django/django", "1.5"): "3.5",
+    ("django/django", "1.6"): "3.5", ("django/django", "1.7"): "3.5",
+    ("django/django", "1.8"): "3.5", ("django/django", "1.9"): "3.5",
+    ("django/django", "1.10"): "3.5", ("django/django", "1.11"): "3.5",
+    ("django/django", "2.0"): "3.5", ("django/django", "2.1"): "3.5",
+    ("django/django", "2.2"): "3.5",
+    ("django/django", "3.0"): "3.6", ("django/django", "3.1"): "3.6",
+    ("django/django", "3.2"): "3.6",
+    ("django/django", "4.0"): "3.8",
+    ("django/django", "4.1"): "3.9", ("django/django", "4.2"): "3.9",
+    ("django/django", "5.0"): "3.11", ("django/django", "5.1"): "3.11",
+    ("django/django", "5.2"): "3.11",
+    # sympy/sympy — all versions use 3.9
+    **{("sympy/sympy", v): "3.9" for v in
+       ["0.7", "1.0", "1.1", "1.2", "1.4", "1.5", "1.6", "1.7", "1.8",
+        "1.9", "1.10", "1.11", "1.12", "1.13", "1.14"]},
+    # pytest-dev/pytest — all versions use 3.9
+    **{("pytest-dev/pytest", v): "3.9" for v in
+       ["4.4", "4.5", "4.6", "5.0", "5.1", "5.2", "5.3", "5.4",
+        "6.0", "6.2", "6.3", "7.0", "7.1", "7.2", "7.4",
+        "8.0", "8.1", "8.2", "8.3", "8.4"]},
+    # scikit-learn/scikit-learn
+    ("scikit-learn/scikit-learn", "0.20"): "3.6",
+    ("scikit-learn/scikit-learn", "0.21"): "3.6",
+    ("scikit-learn/scikit-learn", "0.22"): "3.6",
+    **{("scikit-learn/scikit-learn", v): "3.9" for v in
+       ["1.3", "1.4", "1.5", "1.6"]},
+    # matplotlib/matplotlib
+    **{("matplotlib/matplotlib", v): "3.5" for v in
+       ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "2.0", "2.1", "2.2"]},
+    ("matplotlib/matplotlib", "3.0"): "3.7",
+    **{("matplotlib/matplotlib", v): "3.8" for v in
+       ["3.1", "3.2", "3.3", "3.4"]},
+    **{("matplotlib/matplotlib", v): "3.11" for v in
+       ["3.5", "3.6", "3.7", "3.8", "3.9"]},
+    # sphinx-doc/sphinx — most versions use 3.9
+    **{("sphinx-doc/sphinx", v): "3.9" for v in
+       ["1.5", "1.6", "1.7", "1.8", "2.0", "2.1", "2.2", "2.3", "2.4",
+        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5",
+        "4.0", "4.1", "4.2", "4.3", "4.4", "4.5",
+        "5.0", "5.1", "5.2", "5.3", "6.0", "6.2",
+        "7.0", "7.1", "7.2", "7.3", "7.4"]},
+    ("sphinx-doc/sphinx", "8.0"): "3.10",
+    ("sphinx-doc/sphinx", "8.1"): "3.10",
+    # astropy/astropy
+    **{("astropy/astropy", v): "3.6" for v in
+       ["0.1", "0.2", "0.3", "0.4", "1.1", "1.2", "1.3"]},
+    **{("astropy/astropy", v): "3.9" for v in
+       ["3.0", "3.1", "3.2", "4.1", "4.2", "4.3", "5.0", "5.1", "5.2"]},
+    ("astropy/astropy", "v5.3"): "3.10",
+    # pydata/xarray — all 3.10
+    **{("pydata/xarray", v): "3.10" for v in
+       ["0.12", "0.18", "0.19", "0.20", "2022.03", "2022.06",
+        "2022.09", "2023.07", "2024.05"]},
+    # mwaskom/seaborn — all 3.9
+    **{("mwaskom/seaborn", v): "3.9" for v in
+       ["0.11", "0.12", "0.13", "0.14"]},
+    # psf/requests — all 3.9
+    **{("psf/requests", v): "3.9" for v in
+       ["0.7", "0.8", "0.9", "0.11", "0.13", "0.14",
+        "1.1", "1.2", "2.0", "2.2", "2.3", "2.4", "2.5",
+        "2.7", "2.8", "2.9", "2.10", "2.11", "2.12",
+        "2.17", "2.18", "2.19", "2.22", "2.25", "2.26",
+        "2.27", "2.31", "3.0"]},
+    # pallets/flask
+    ("pallets/flask", "2.0"): "3.9",
+    ("pallets/flask", "2.1"): "3.10",
+    **{("pallets/flask", v): "3.11" for v in
+       ["2.2", "2.3", "3.0", "3.1"]},
+    # pylint-dev/pylint — all 3.9
+    **{("pylint-dev/pylint", v): "3.9" for v in
+       ["2.8", "2.9", "2.10", "2.11", "2.13", "2.14", "2.15",
+        "2.16", "2.17", "3.0", "3.1", "3.2", "3.3", "4.0"]},
+}
+
+DEFAULT_PYTHON = "3.9"
+
+# Repo-specific test commands.
+# {test_ids} is replaced with the test specifiers.
+REPO_TEST_COMMANDS: dict[str, str] = {
+    "django/django": "./tests/runtests.py --verbosity 2 --settings=test_sqlite --parallel 1 {test_ids}",
+    "sympy/sympy": "PYTHONWARNINGS='ignore::UserWarning,ignore::SyntaxWarning' bin/test -C --verbose {test_ids}",
+    "matplotlib/matplotlib": "python -m pytest -rA {test_ids}",
+    "sphinx-doc/sphinx": "python -m pytest -rA {test_ids}",
+    "astropy/astropy": "python -m pytest -rA -vv -o console_output_style=classic --tb=no {test_ids}",
+    "mwaskom/seaborn": "python -m pytest --no-header -rA {test_ids}",
+}
+
+DEFAULT_TEST_COMMAND = "python -m pytest -xvs {test_ids}"
+
+# Extra pip packages needed per repo (beyond the repo itself).
+REPO_EXTRA_PACKAGES: dict[str, list[str]] = {
+    "sympy/sympy": ["mpmath", "flake8"],
+    "pytest-dev/pytest": ["xmlschema"],
+    "pylint-dev/pylint": ["astroid", "toml"],
+    "sphinx-doc/sphinx": ["Jinja2"],
+}
+
+
+# ---------------------------------------------------------------------------
+# Row loading
+# ---------------------------------------------------------------------------
+
+def _load_row(dataset_path: Path, id_field: str, example_id: str) -> dict[str, Any]:
+    """Load a single JSONL row by ID field."""
+    with open(dataset_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                continue
+            value = row.get(id_field)
+            if isinstance(value, str) and value == example_id:
+                return row
+    raise ValueError(
+        f"Example id '{example_id}' not found using field '{id_field}' in {dataset_path}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test ID parsing
+# ---------------------------------------------------------------------------
+
+def parse_test_ids(raw: Any) -> list[str]:
+    """Parse test IDs from a JSON-encoded string or a list.
+
+    SWE-bench stores FAIL_TO_PASS and PASS_TO_PASS as JSON strings inside
+    the JSONL row, e.g. '["test_foo.TestBar.test_baz"]'. Handle both that
+    and native lists.
+    """
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            # Treat as a single test ID
+            return [raw]
+        if isinstance(parsed, list):
+            return [str(t) for t in parsed if t]
+        if isinstance(parsed, str):
+            return [parsed] if parsed else []
+        return []
+    if isinstance(raw, list):
+        return [str(t) for t in raw if t]
+    return []
+
+
+def extract_test_files_from_patch(patch_text: str) -> list[str]:
+    """Extract file paths from a git diff that look like test files."""
+    files: list[str] = []
+    for line in patch_text.split("\n"):
+        if line.startswith("diff --git"):
+            # e.g. "diff --git a/tests/foo.py b/tests/foo.py"
+            parts = line.split()
+            if len(parts) >= 4:
+                path = parts[-1].lstrip("b/")
+                if "test" in path.lower():
+                    files.append(path)
+    return files
+
+
+def resolve_test_ids(
+    test_ids: list[str],
+    test_files: list[str],
+    repo_path: Path,
+) -> list[str]:
+    """Resolve bare test function names to pytest node IDs.
+
+    SWE-bench test IDs come in several formats:
+    - Bare function name: "test_Vector"
+    - Dotted module path: "tests.test_foo.TestClass.test_method"
+    - Already a file path: "tests/test_foo.py::test_method"
+
+    We use test_patch file paths to map bare names to file::function format.
+    """
+    resolved: list[str] = []
+    for tid in test_ids:
+        if "::" in tid:
+            # Already a pytest node ID
+            resolved.append(tid)
+            continue
+
+        if "/" in tid:
+            # Already a file-based path
+            resolved.append(tid)
+            continue
+
+        # Dotted path like "tests.models.test_foo.TestBar.test_method"
+        # or bare name like "test_Vector"
+        if "." in tid:
+            # Try to split into file path + test node
+            # Convention: dots before the test class/function are module path
+            parts = tid.split(".")
+            # Try progressively longer file paths
+            found = False
+            for i in range(len(parts) - 1, 0, -1):
+                candidate_path = "/".join(parts[:i]) + ".py"
+                if (repo_path / candidate_path).exists():
+                    test_node = "::".join(parts[i:])
+                    resolved.append(f"{candidate_path}::{test_node}")
+                    found = True
+                    break
+            if not found:
+                # Fall back: use -k matching via the full dotted name
+                resolved.append(tid)
+            continue
+
+        # Bare function name — find it in test_patch files
+        if test_files:
+            # Search for the function in known test files
+            matched = False
+            for tf in test_files:
+                tf_path = repo_path / tf
+                if tf_path.exists():
+                    try:
+                        content = tf_path.read_text()
+                        if f"def {tid}(" in content:
+                            resolved.append(f"{tf}::{tid}")
+                            matched = True
+                            break
+                    except OSError:
+                        continue
+            if matched:
+                continue
+
+        # Last resort: use pytest -k for pattern matching
+        resolved.append(tid)
+
+    return resolved
+
+
+# ---------------------------------------------------------------------------
+# Repo management
+# ---------------------------------------------------------------------------
+
+def ensure_repo(repo: str, cache_dir: Path) -> Path:
+    """Clone repo to cache or return existing path."""
+    # repo is like "django/django" → cache as "django__django"
+    safe_name = repo.replace("/", "__")
+    repo_path = cache_dir / safe_name
+
+    if repo_path.exists() and (repo_path / ".git").exists():
+        # Fetch latest to make sure we have the base_commit
+        subprocess.run(
+            ["git", "fetch", "--all", "--quiet"],
+            cwd=repo_path,
+            capture_output=True,
+        )
+        return repo_path
+
+    repo_path.mkdir(parents=True, exist_ok=True)
+    url = f"https://github.com/{repo}.git"
+    result = subprocess.run(
+        ["git", "clone", "--quiet", url, str(repo_path)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git clone failed for {url}: {result.stderr}")
+    return repo_path
+
+
+def make_working_copy(repo_path: Path) -> Path:
+    """Copy cached repo to a temp dir for safe modification."""
+    tmp = tempfile.mkdtemp(prefix="helm-swebench-")
+    working = Path(tmp) / repo_path.name
+    shutil.copytree(repo_path, working, symlinks=True)
+    return working
+
+
+def checkout_base(repo_path: Path, base_commit: str) -> None:
+    """Hard checkout to base_commit and clean."""
+    result = subprocess.run(
+        ["git", "checkout", base_commit, "--force"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git checkout failed: {result.stderr}")
+    subprocess.run(
+        ["git", "clean", "-fdx"],
+        cwd=repo_path,
+        capture_output=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Patch application
+# ---------------------------------------------------------------------------
+
+def apply_patch(repo_path: Path, patch_text: str, label: str = "patch") -> None:
+    """Apply a patch via git apply."""
+    result = subprocess.run(
+        ["git", "apply", "--verbose", "-"],
+        input=patch_text,
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git apply ({label}) failed: {result.stderr}")
+
+
+def find_agent_patch(experiment_dir: Path) -> str | None:
+    """Find and read the agent's patch from the experiment workspace.
+
+    Looks for .patch or .diff files in workspace/, or a file named 'patch'.
+    """
+    workspace = experiment_dir / "workspace"
+    if not workspace.exists():
+        return None
+
+    # Look for patch files
+    candidates = (
+        list(workspace.glob("*.patch"))
+        + list(workspace.glob("*.diff"))
+    )
+    # Also check for a plain file named 'patch'
+    plain_patch = workspace / "patch"
+    if plain_patch.is_file() and plain_patch not in candidates:
+        candidates.append(plain_patch)
+
+    if not candidates:
+        return None
+
+    # Use the most recently modified one
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0].read_text()
+
+
+# ---------------------------------------------------------------------------
+# Test environment setup
+# ---------------------------------------------------------------------------
+
+def get_python_version(repo: str, version: str) -> str:
+    """Look up the required Python version for a (repo, version) pair."""
+    return PYTHON_VERSIONS.get((repo, version), DEFAULT_PYTHON)
+
+
+def setup_test_env(
+    repo_path: Path,
+    repo: str,
+    version: str,
+    timeout: int,
+) -> str | None:
+    """Create venv and install the repo + test deps. Returns error or None."""
+    python_version = get_python_version(repo, version)
+    venv_path = repo_path / ".venv"
+
+    # Create venv with the correct Python version
+    result = subprocess.run(
+        ["uv", "venv", str(venv_path), "--python", python_version],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        return f"uv venv --python {python_version} failed: {result.stderr}"
+
+    pip_env = {**os.environ, "VIRTUAL_ENV": str(venv_path)}
+
+    # Install the project in editable mode
+    result = subprocess.run(
+        ["uv", "pip", "install", "-e", ".", "--quiet"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=pip_env,
+    )
+    if result.returncode != 0:
+        return f"uv pip install -e . failed: {result.stderr}"
+
+    # Install pytest (needed by most repos)
+    subprocess.run(
+        ["uv", "pip", "install", "pytest", "--quiet"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=pip_env,
+    )
+
+    # Install repo-specific extra packages
+    extras = REPO_EXTRA_PACKAGES.get(repo, [])
+    if extras:
+        subprocess.run(
+            ["uv", "pip", "install", *extras, "--quiet"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=pip_env,
+        )
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Test execution
+# ---------------------------------------------------------------------------
+
+def get_test_command(repo: str) -> str:
+    """Return the test command template for a repo."""
+    return REPO_TEST_COMMANDS.get(repo, DEFAULT_TEST_COMMAND)
+
+
+def _pytest_arg_for_id(test_id: str) -> tuple[str, bool]:
+    """Return (pytest argument, uses_keyword_match).
+
+    If test_id is a proper node (file::func), return it directly.
+    If it's a bare name, use -k matching.
+    """
+    if "::" in test_id or "/" in test_id or test_id.endswith(".py"):
+        return test_id, False
+    # Bare name or unresolved — use -k
+    return test_id, True
+
+
+def run_tests(
+    repo_path: Path,
+    test_ids: list[str],
+    repo: str,
+    timeout: int,
+) -> dict[str, bool]:
+    """Run test IDs and return {test_id: passed}."""
+    if not test_ids:
+        return {}
+
+    command_template = get_test_command(repo)
+    venv_path = repo_path / ".venv"
+    venv_bin = venv_path / "bin"
+
+    env = {**os.environ, "VIRTUAL_ENV": str(venv_path)}
+    env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
+
+    results: dict[str, bool] = {}
+
+    # Run each test individually for granular results
+    for test_id in test_ids:
+        arg, uses_keyword = _pytest_arg_for_id(test_id)
+
+        if uses_keyword and "pytest" in command_template:
+            # Use -k for keyword matching on bare names
+            command = command_template.replace("{test_ids}", f"-k {arg}")
+        else:
+            command = command_template.replace("{test_ids}", arg)
+
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+            results[test_id] = proc.returncode == 0
+        except subprocess.TimeoutExpired:
+            results[test_id] = False
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Verification computation
+# ---------------------------------------------------------------------------
+
+def compute_verification(
+    fail_to_pass_results: dict[str, bool],
+    pass_to_pass_results: dict[str, bool],
+    setup_error: str | None = None,
+) -> dict[str, Any]:
+    """Compute the final verification payload from test results."""
+    if setup_error is not None:
+        return {
+            "status": "fail",
+            "score": 0.0,
+            "reason": f"Setup error: {setup_error}",
+            "details": {
+                "fail_to_pass_passed": 0,
+                "fail_to_pass_total": 0,
+                "pass_to_pass_passed": 0,
+                "pass_to_pass_total": 0,
+                "swebench_resolved": False,
+                "partial_score": 0.0,
+                "setup_error": setup_error,
+            },
+        }
+
+    f2p_total = len(fail_to_pass_results)
+    f2p_passed = sum(1 for v in fail_to_pass_results.values() if v)
+
+    p2p_total = len(pass_to_pass_results)
+    p2p_passed = sum(1 for v in pass_to_pass_results.values() if v)
+
+    has_regressions = p2p_passed < p2p_total
+    all_f2p_pass = f2p_total > 0 and f2p_passed == f2p_total
+    resolved = all_f2p_pass and not has_regressions
+
+    # Score: weighted average — FAIL_TO_PASS is primary, regressions penalize
+    if f2p_total == 0:
+        partial_score = 0.0
+    else:
+        f2p_score = f2p_passed / f2p_total
+        regression_penalty = (1.0 - p2p_passed / p2p_total) if p2p_total > 0 else 0.0
+        partial_score = max(0.0, f2p_score - regression_penalty)
+
+    if resolved:
+        status = "pass"
+        score = 1.0
+        reason = f"Resolved: {f2p_passed}/{f2p_total} FAIL_TO_PASS pass, 0 regressions"
+    elif f2p_passed > 0:
+        status = "partial"
+        score = round(partial_score, 4)
+        regressions = p2p_total - p2p_passed
+        reason = f"{f2p_passed}/{f2p_total} FAIL_TO_PASS pass, {regressions} regressions"
+    else:
+        status = "fail"
+        score = 0.0
+        reason = f"0/{f2p_total} FAIL_TO_PASS pass"
+
+    return {
+        "status": status,
+        "score": score,
+        "reason": reason,
+        "details": {
+            "fail_to_pass_passed": f2p_passed,
+            "fail_to_pass_total": f2p_total,
+            "pass_to_pass_passed": p2p_passed,
+            "pass_to_pass_total": p2p_total,
+            "swebench_resolved": resolved,
+            "partial_score": round(partial_score, 4),
+            "setup_error": None,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="SWE-bench ground truth verifier"
+    )
+    parser.add_argument("--instance-id", required=True, help="SWE-bench instance ID")
+    parser.add_argument("--experiment-dir", required=True, type=Path)
+    parser.add_argument("--dataset-path", required=True, type=Path)
+    parser.add_argument(
+        "--repo-cache",
+        type=Path,
+        default=Path("~/.cache/helm/swebench-repos").expanduser(),
+    )
+    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--id-field", default="instance_id")
+    args = parser.parse_args()
+
+    def _emit_error(msg: str) -> int:
+        payload = {
+            "status": "fail",
+            "score": 0.0,
+            "reason": f"Verifier error: {msg}",
+            "details": {"setup_error": msg},
+        }
+        print(json.dumps(payload))
+        return 3
+
+    working_copy: Path | None = None
+
+    try:
+        # 1. Load the dataset row
+        row = _load_row(args.dataset_path, args.id_field, args.instance_id)
+
+        # 2. Parse test IDs
+        fail_to_pass = parse_test_ids(row.get("FAIL_TO_PASS", []))
+        pass_to_pass = parse_test_ids(row.get("PASS_TO_PASS", []))
+
+        if not fail_to_pass:
+            return _emit_error("No FAIL_TO_PASS tests found in dataset row")
+
+        repo = row.get("repo", "")
+        base_commit = row.get("base_commit", "")
+        version = row.get("version", "")
+        test_patch = row.get("test_patch", "")
+
+        if not repo or not base_commit:
+            return _emit_error(f"Missing repo ({repo!r}) or base_commit ({base_commit!r})")
+
+        # 3. Ensure repo is cached
+        args.repo_cache.mkdir(parents=True, exist_ok=True)
+        repo_path = ensure_repo(repo, args.repo_cache)
+
+        # 4. Make a working copy for safe modification
+        working_copy = make_working_copy(repo_path)
+
+        # 5. Checkout base commit
+        checkout_base(working_copy, base_commit)
+
+        # 6. Apply test_patch (adds FAIL_TO_PASS test definitions)
+        test_files: list[str] = []
+        if test_patch:
+            test_files = extract_test_files_from_patch(test_patch)
+            apply_patch(working_copy, test_patch, label="test_patch")
+
+        # 7. Apply agent's changes
+        agent_patch = find_agent_patch(args.experiment_dir)
+        if agent_patch:
+            apply_patch(working_copy, agent_patch, label="agent_patch")
+
+        # 8. Resolve bare test IDs to pytest node IDs
+        fail_to_pass = resolve_test_ids(fail_to_pass, test_files, working_copy)
+        pass_to_pass = resolve_test_ids(pass_to_pass, test_files, working_copy)
+
+        # 9. Setup test environment
+        setup_err = setup_test_env(working_copy, repo, version, timeout=args.timeout)
+        if setup_err:
+            result = compute_verification({}, {}, setup_error=setup_err)
+            print(json.dumps(result))
+            return 2
+
+        # 10. Run tests
+        f2p_results = run_tests(working_copy, fail_to_pass, repo, timeout=args.timeout)
+        p2p_results = run_tests(working_copy, pass_to_pass, repo, timeout=args.timeout)
+
+        # 11. Compute and emit result
+        result = compute_verification(f2p_results, p2p_results)
+        print(json.dumps(result))
+
+        if result["status"] == "pass":
+            return 0
+        return 2
+
+    except Exception as e:
+        return _emit_error(str(e))
+
+    finally:
+        # Clean up working copy
+        if working_copy is not None and working_copy.exists():
+            shutil.rmtree(working_copy, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

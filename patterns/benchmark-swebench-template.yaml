@@ -27,20 +27,22 @@ orchestrator:
 benchmark:
   adapter: swebench
   id: princeton-nlp/SWE-bench_Verified
-  dataset_path: data/swebench_verified.jsonl
-  split: verified
+  dataset_path: data/swe_bench_verified.jsonl
+  split: null
   seed: 13
   max_examples: 10
   verifier:
-    # completion: pass if run reached completion signals
-    mode: completion
-    # command mode (recommended for real benchmark scoring):
-    # mode: command
-    # command: "python scripts/verify_dataset_contract.py --dataset-path {dataset_path} --example-id {example_id} --experiment-dir {experiment_dir} --id-field instance_id"
-    # pass_exit_codes: [0]
-  # example_id: swebench__django-12345
+    mode: command
+    command: >-
+      python scripts/verify_swebench.py
+      --instance-id {example_id}
+      --experiment-dir {experiment_dir}
+      --dataset-path {dataset_path}
+      --timeout 300
+    pass_exit_codes: [0]
+  # example_id: django__django-12345
   # example_ids:
-  #   - swebench__django-12345
+  #   - django__django-12345
 
 evaluation:
   dimensions:

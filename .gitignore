@@ -33,5 +33,8 @@ plan.md
 helm-architecture-playground.html
 scripts/spike-*
 
+# Downloaded benchmark datasets
+data/
+
 # Eval output artifacts
 outputs/
