@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -286,11 +287,18 @@ def ensure_repo(repo: str, cache_dir: Path) -> Path:
 
     if repo_path.exists() and (repo_path / ".git").exists():
         # Fetch latest to make sure we have the base_commit
-        subprocess.run(
+        result = subprocess.run(
             ["git", "fetch", "--all", "--quiet"],
             cwd=repo_path,
             capture_output=True,
+            text=True,
         )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"git fetch failed for cached repo {repo_path}. "
+                f"Try deleting the cache entry and re-running: rm -rf {repo_path}\n"
+                f"stderr: {result.stderr}"
+            )
         return repo_path
 
     repo_path.mkdir(parents=True, exist_ok=True)
@@ -419,7 +427,7 @@ def setup_test_env(
         return f"uv pip install -e . failed: {result.stderr}"
 
     # Install pytest (needed by most repos)
-    subprocess.run(
+    result = subprocess.run(
         ["uv", "pip", "install", "pytest", "--quiet"],
         cwd=repo_path,
         capture_output=True,
@@ -427,11 +435,13 @@ def setup_test_env(
         timeout=timeout,
         env=pip_env,
     )
+    if result.returncode != 0:
+        return f"uv pip install pytest failed: {result.stderr}"
 
     # Install repo-specific extra packages
     extras = REPO_EXTRA_PACKAGES.get(repo, [])
     if extras:
-        subprocess.run(
+        result = subprocess.run(
             ["uv", "pip", "install", *extras, "--quiet"],
             cwd=repo_path,
             capture_output=True,
@@ -439,6 +449,8 @@ def setup_test_env(
             timeout=timeout,
             env=pip_env,
         )
+        if result.returncode != 0:
+            return f"uv pip install extras {extras} failed: {result.stderr}"
 
     return None
 
@@ -464,6 +476,21 @@ def _pytest_arg_for_id(test_id: str) -> tuple[str, bool]:
     return test_id, True
 
 
+# Characters allowed in test IDs: alphanumeric, underscore, dot, slash,
+# colon, hyphen, square brackets (pytest parameterize). Reject anything
+# else to prevent shell injection via dataset-controlled strings.
+_SAFE_TEST_ID_RE = re.compile(r"^[\w./:\-\[\]]+$")
+
+
+def _sanitize_test_id(test_id: str) -> str:
+    """Validate a test ID contains no shell metacharacters."""
+    if not _SAFE_TEST_ID_RE.match(test_id):
+        raise ValueError(
+            f"Test ID contains disallowed characters (possible injection): {test_id!r}"
+        )
+    return test_id
+
+
 def run_tests(
     repo_path: Path,
     test_ids: list[str],
@@ -485,7 +512,8 @@ def run_tests(
 
     # Run each test individually for granular results
     for test_id in test_ids:
-        arg, uses_keyword = _pytest_arg_for_id(test_id)
+        safe_id = _sanitize_test_id(test_id)
+        arg, uses_keyword = _pytest_arg_for_id(safe_id)
 
         if uses_keyword and "pytest" in command_template:
             # Use -k for keyword matching on bare names
@@ -494,6 +522,9 @@ def run_tests(
             command = command_template.replace("{test_ids}", arg)
 
         try:
+            # shell=True is required for repo-specific commands that use
+            # shell syntax (e.g. sympy's PYTHONWARNINGS='...' env prefix).
+            # Test IDs are sanitized above to prevent injection.
             proc = subprocess.run(
                 command,
                 shell=True,

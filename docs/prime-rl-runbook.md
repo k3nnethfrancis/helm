@@ -130,6 +130,58 @@ Hosted run example:
 
 - `vqkgzi286branqmhkq1myu0g` (completed)
 
+### SWE-bench ground truth verification environment
+
+This environment trains models to generate code patches scored against real
+test execution. Each rollout runs `scripts/verify_swebench.py` as a subprocess
+that clones, patches, installs, and runs the target repo's test suite.
+
+**Dataset acquisition:**
+
+```bash
+# Download SWE-bench Verified from HuggingFace (~500 instances)
+python scripts/download_swebench.py
+# Output: data/swe_bench_verified.jsonl
+```
+
+A small bundled sample (`environments/helm_swebench/data/sample.jsonl`, 3
+instances) is provided for smoke testing without downloading the full dataset.
+
+**Local install and eval:**
+
+```bash
+prime env install helm_swebench
+# Smoke test with bundled sample (default)
+prime eval run helm_swebench -m openai/gpt-4.1-mini -n 1 --rollouts-per-example 1
+# Use the full dataset
+prime eval run helm_swebench -m openai/gpt-4.1-mini -n 5 \
+  -a '{"dataset_path":"data/swe_bench_verified.jsonl","max_examples":5}'
+```
+
+**RL training:**
+
+```bash
+prime rl run configs/prime/rl.helm-swebench-smoke.toml
+```
+
+**Key config differences from orchestration-policy:**
+
+| Knob | Orchestration-policy | SWE-bench | Why |
+| ---- | ---- | ---- | ---- |
+| `batch_size` | 32 | 4 | Each rollout runs real tests (30-300s) |
+| `max_tokens` | 512 | 4096 | Patches can be long |
+| `learning_rate` | 1e-6 | 5e-7 | Code generation is harder |
+
+**Cache sizing:** The verifier caches git clones at `~/.cache/helm/swebench-repos/`.
+Each repo is 100MB-2GB. Expect ~10GB for common SWE-bench repos.
+
+**Cost expectations:** At 30-300s per rollout, a 4-example batch with 2 rollouts
+each takes 4-40 minutes of wall time. Budget GPU/API time accordingly.
+
+**Hub deployment note:** The verifier script lives at `scripts/verify_swebench.py`
+(not bundled in the wheel). For Hub-hosted runs, set `HELM_VERIFY_SWEBENCH` env
+var to the absolute path of the verifier on the worker.
+
 ## 6) Readiness gates before first hosted run
 
 Run automated checks:
@@ -146,7 +198,7 @@ uv run helm readiness --summary experiments/benchmark-runs/<summary>.json
 
 ## 7) Current limitations
 
-1. SWE-bench/tau-bench benchmark-native scorer scripts are not bundled yet.
+1. SWE-bench verifier is implemented (`scripts/verify_swebench.py`); tau-bench scorer is not bundled yet.
 2. Default verifier mode is `completion`; for benchmark-native correctness,
    configure `benchmark.verifier.mode: command` with your scorer.
    Supported command placeholders:

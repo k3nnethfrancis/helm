@@ -18,9 +18,8 @@ bin/
 # macOS
 .DS_Store
 
-# Experiments (only curated examples tracked)
-experiments/*/
-!experiments/hub-spoke-parallel-build-c2e0a21d/
+# Experiment run artifacts
+experiments/
 
 # Internal planning docs
 plan.md

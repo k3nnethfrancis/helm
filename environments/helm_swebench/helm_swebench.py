@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -190,7 +191,7 @@ def _resolve_verifier_script() -> Path:
 
 
 def load_environment(
-    dataset_path: str = "data/swe_bench_verified.jsonl",
+    dataset_path: str = "data/sample.jsonl",
     dataset_split: str = "train",
     max_examples: int = -1,
     system_prompt: str = SYSTEM_PROMPT,
@@ -232,7 +233,10 @@ def load_environment(
         return score
 
     # --- Reward function 2: verifier subprocess ---
-    # Closure captures dataset_path, expanded_repo_cache, timeout, verifier_script
+    # Closure captures expanded_repo_cache, timeout, verifier_script.
+    # The answer blob carries all metadata the verifier needs, so we write
+    # a single-row JSONL to the temp dir — no dependency on the original
+    # dataset path at reward time (fixes HuggingFace / remote dataset case).
 
     def verifier_reward(completion: Any, answer: Any, **_kwargs: Any) -> float:
         """Run the SWE-bench verifier and return the score."""
@@ -250,18 +254,16 @@ def load_environment(
         if not instance_id:
             return 0.0
 
-        # Resolve the dataset path for the verifier
-        resolved = _resolve_dataset_path(dataset_path)
-        if resolved is None:
-            return 0.0
-
-        # Write completion to a temp experiment dir the verifier expects
+        tmp_dir = tempfile.mkdtemp(prefix="helm-swebench-reward-")
         try:
-            tmp_dir = tempfile.mkdtemp(prefix="helm-swebench-reward-")
+            # Write a single-row JSONL so the verifier can load it
+            row_file = Path(tmp_dir) / "instance.jsonl"
+            row_file.write_text(json.dumps(meta) + "\n")
+
+            # Write the model's patch where the verifier expects it
             workspace = Path(tmp_dir) / "workspace"
             workspace.mkdir()
-            patch_file = workspace / "model.patch"
-            patch_file.write_text(text)
+            (workspace / "model.patch").write_text(text)
 
             result = subprocess.run(
                 [
@@ -269,7 +271,7 @@ def load_environment(
                     str(verifier_script),
                     "--instance-id", instance_id,
                     "--experiment-dir", tmp_dir,
-                    "--dataset-path", str(resolved),
+                    "--dataset-path", str(row_file),
                     "--repo-cache", str(expanded_repo_cache),
                     "--timeout", str(timeout),
                 ],
@@ -287,6 +289,8 @@ def load_environment(
 
         except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
             return 0.0
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # --- Reward function 3: patch parsimony ---
 

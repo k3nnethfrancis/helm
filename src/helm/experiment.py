@@ -81,34 +81,45 @@ class Experiment:
             for a in config.agents
         }
 
+    # Known harness label → SDK agent ID mappings.
+    # Unknown labels pass through as-is; the SDK validates them.
+    HARNESS_ALIASES: dict[str, str] = {
+        # Anthropic
+        "claude": "claude",
+        "claude-code": "claude",
+        # OpenAI
+        "codex": "codex",
+        "openai-codex": "codex",
+        "codex-cli": "codex",
+        # Open-source / third-party
+        "opencode": "opencode",
+        "amp": "amp",
+        "aider": "aider",
+    }
+
     def _resolve_session_agent(self, harness: str) -> str:
         """Resolve pattern `harness` into the SDK `agent` identifier.
 
         Helm keeps `harness` labels human-friendly (`claude-code`, etc.) while the
         SDK expects concrete agent IDs (for example `claude`).
+
+        Known aliases are mapped via HARNESS_ALIASES. Unknown labels are passed
+        through as-is — the SDK validates whether the agent ID is supported.
         """
         normalized = harness.strip().lower()
         if not normalized:
             return "claude"
 
-        aliases = {
-            "claude": "claude",
-            "claude-code": "claude",
-            "codex": "codex",
-            "openai-codex": "codex",
-            "opencode": "opencode",
-            "amp": "amp",
-        }
-        if normalized in aliases:
-            return aliases[normalized]
+        if normalized in self.HARNESS_ALIASES:
+            return self.HARNESS_ALIASES[normalized]
 
         # Fallback: treat "*-code" as "<name>" for generic bring-your-own labels.
         if normalized.endswith("-code"):
             candidate = normalized[:-5]
             if candidate:
-                return aliases.get(candidate, candidate)
+                return self.HARNESS_ALIASES.get(candidate, candidate)
 
-        # Last resort: pass through as-is and let SDK validate/accept it.
+        # Pass through as-is and let SDK validate/accept it.
         return normalized
 
     async def setup(self) -> None:

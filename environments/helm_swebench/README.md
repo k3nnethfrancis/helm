@@ -53,7 +53,7 @@ prime eval run helm_swebench \
 
 | Arg | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `dataset_path` | str | `"data/swe_bench_verified.jsonl"` | Local JSONL path, directory, or HF dataset id |
+| `dataset_path` | str | `"data/sample.jsonl"` | Local JSONL path, directory, or HF dataset id |
 | `dataset_split` | str | `"train"` | Split name when loading HF dataset |
 | `max_examples` | int | `-1` | Cap loaded examples (`-1` means all) |
 | `system_prompt` | str | built-in | Override system prompt |
