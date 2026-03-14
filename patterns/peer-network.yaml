@@ -16,12 +16,18 @@ agents:
       You are a research agent in a peer network. Your role is to gather
       information and share findings with your peers.
 
-      ## Coordination Protocol
+      ## Coordination Affordances
 
-      - Check coordination/messages/ for messages from other agents
-      - Write your messages to coordination/messages/{timestamp}-researcher-{recipient}.md
-      - Use coordination/state.json to see what others are working on
-      - Write to coordination/signals/researcher.{status} to signal your state
+      Persistent channels available in this experiment:
+      - `coordination/messages/` for durable targeted or broadcast peer messages
+      - `coordination/state.json` for shared durable state about what others are working on
+      - `coordination/signals/` for durable status and completion markers
+      - `workspace/research/` for research artifacts peers can inspect later
+
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Decide what to persist versus what to leave transient. If a finding, handoff, or blocker must survive a long trajectory or be inspectable later, write it to the filesystem rather than relying only on live context.
 
       ## Your Responsibilities
 
@@ -44,12 +50,18 @@ agents:
       You are an implementation agent in a peer network. Your role is to
       write code based on research and requirements.
 
-      ## Coordination Protocol
+      ## Coordination Affordances
 
-      - Check coordination/messages/ for messages from other agents
-      - Write your messages to coordination/messages/{timestamp}-implementer-{recipient}.md
-      - Use coordination/state.json to see what others are working on
-      - Write to coordination/signals/implementer.{status} to signal your state
+      Persistent channels available in this experiment:
+      - `coordination/messages/` for durable targeted or broadcast peer messages
+      - `coordination/state.json` for shared durable state about what others are working on
+      - `coordination/signals/` for durable status and completion markers
+      - `workspace/research/` and `workspace/src/` for durable research and code artifacts
+
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Decide what to persist versus what to leave transient. If a question, dependency, or implementation handoff must survive a long trajectory or be inspectable later, write it to the filesystem rather than relying only on live context.
 
       ## Your Responsibilities
 
@@ -72,12 +84,18 @@ agents:
       You are a review agent in a peer network. Your role is to review
       code and provide feedback.
 
-      ## Coordination Protocol
+      ## Coordination Affordances
 
-      - Check coordination/messages/ for messages from other agents
-      - Write your messages to coordination/messages/{timestamp}-reviewer-{recipient}.md
-      - Use coordination/state.json to see what others are working on
-      - Write to coordination/signals/reviewer.{status} to signal your state
+      Persistent channels available in this experiment:
+      - `coordination/messages/` for durable targeted or broadcast peer messages
+      - `coordination/state.json` for shared durable state about what others are working on
+      - `coordination/signals/` for durable status and completion markers
+      - `coordination/reviews/` for durable review artifacts
+
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Decide what to persist versus what to leave transient. If review feedback or completion state must survive a long trajectory or be inspectable later, write it to the filesystem rather than relying only on live context.
 
       ## Your Responsibilities
 
@@ -127,6 +145,42 @@ coordination:
     state: coordination/state.json
     signals: coordination/signals/
     reviews: coordination/reviews/
+
+  channels:
+    - id: persistent_peer_messages
+      medium: filesystem
+      persistence: persistent
+      scope: mixed
+      paths:
+        - coordination/messages/
+      description: Durable targeted or broadcast peer handoffs.
+    - id: shared_coordination_state
+      medium: filesystem
+      persistence: persistent
+      scope: shared
+      paths:
+        - coordination/state.json
+      description: Shared durable state about active work and coordination context.
+    - id: review_artifacts
+      medium: filesystem
+      persistence: persistent
+      scope: mixed
+      paths:
+        - coordination/reviews/
+      description: Durable review feedback and verification artifacts.
+    - id: completion_signals
+      medium: filesystem
+      persistence: persistent
+      scope: broadcast
+      paths:
+        - coordination/signals/
+      description: Durable readiness and completion markers.
+    - id: live_followup_messages
+      medium: live_message
+      persistence: ephemeral
+      scope: mixed
+      availability: harness_dependent
+      description: Fast transient follow-up messages delivered into active sessions when supported by the harness.
 
   state_schema:
     agents:

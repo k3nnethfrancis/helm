@@ -12,6 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from helm.collector import summarize_coordination_messages
+from helm.run_outcomes import normalize_run_record
+
 RUN_DATA_SCHEMA_VERSION = "helm.run_data.v1"
 RUN_DATA_FILENAME = "run_data.json"
 
@@ -34,6 +37,47 @@ def _parse_ts(value: Any) -> datetime | None:
     except ValueError:
         return None
 
+
+def _assistant_item_context(
+    item: dict[str, Any],
+) -> tuple[str | None, dict[str, Any], dict[str, Any]]:
+    data = item.get("data", {})
+    if not isinstance(data, dict):
+        data = {}
+    item_data = data.get("item", {})
+    if not isinstance(item_data, dict):
+        item_data = {}
+    role = item_data.get("role")
+    if not isinstance(role, str):
+        role = None
+    return role, data, item_data
+
+
+def _assistant_item_id(
+    item: dict[str, Any],
+    data: dict[str, Any],
+    item_data: dict[str, Any],
+    index: int,
+) -> str:
+    item_id = item_data.get("item_id")
+    if isinstance(item_id, str) and item_id:
+        return item_id
+
+    raw = data.get("raw", {})
+    if isinstance(raw, dict):
+        message = raw.get("message", {})
+        if isinstance(message, dict):
+            message_id = message.get("id")
+            if isinstance(message_id, str) and message_id:
+                return f"message:{message_id}"
+
+        for key in ("uuid", "id"):
+            candidate = raw.get(key)
+            if isinstance(candidate, str) and candidate:
+                return f"raw:{candidate}"
+
+    timestamp = item.get("timestamp")
+    return f"synthetic:{index}:{timestamp}"
 
 def _iter_events(transcript: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     events: list[tuple[str, dict[str, Any]]] = []
@@ -75,33 +119,47 @@ def _extract_assistant_intervals(
 
     for _agent_id, agent_data in transcript.get("agents", {}).items():
         start_by_item_id: dict[str, datetime] = {}
+        interval_by_item_id: dict[str, tuple[datetime, datetime]] = {}
+        previous_ts: datetime | None = None
         items = agent_data.get("items", [])
         if not isinstance(items, list):
             continue
 
-        for item in items:
-            if not isinstance(item, dict):
-                continue
+        sorted_items = sorted(
+            (item for item in items if isinstance(item, dict)),
+            key=lambda item: str(item.get("timestamp", "")),
+        )
+
+        for index, item in enumerate(sorted_items):
             event_type = item.get("event_type")
-            data = item.get("data", {})
-            item_data = data.get("item", {}) if isinstance(data, dict) else {}
-            role = item_data.get("role")
-            if role != "assistant":
-                continue
-
-            item_id = item_data.get("item_id")
+            role, data, item_data = _assistant_item_context(item)
             ts = _parse_ts(item.get("timestamp"))
-            if not isinstance(item_id, str) or ts is None:
+            if ts is None:
                 continue
 
+            if role != "assistant":
+                previous_ts = ts
+                continue
+
+            item_id = _assistant_item_id(item, data, item_data, index)
             if event_type == "item.started":
                 start_by_item_id[item_id] = ts
             elif event_type == "item.completed":
-                start_ts = start_by_item_id.pop(item_id, ts)
-                end_ts = ts
-                if end_ts < start_ts:
-                    end_ts = start_ts
-                intervals.append((start_ts, end_ts))
+                existing_interval = interval_by_item_id.get(item_id)
+                if existing_interval is not None:
+                    start_ts, end_ts = existing_interval
+                    if ts > end_ts:
+                        interval_by_item_id[item_id] = (start_ts, ts)
+                else:
+                    start_ts = start_by_item_id.pop(item_id, previous_ts or ts)
+                    end_ts = ts
+                    if end_ts < start_ts:
+                        end_ts = start_ts
+                    interval_by_item_id[item_id] = (start_ts, end_ts)
+
+            previous_ts = ts
+
+        intervals.extend(interval_by_item_id.values())
 
     return intervals
 
@@ -160,6 +218,7 @@ def _build_orchestration_policy_trace(metadata: dict[str, Any]) -> dict[str, Any
     run = metadata.get("run", {})
     if not isinstance(run, dict):
         run = {}
+    normalized_run = normalize_run_record(run)
 
     interventions = _extract_interventions(metadata)
     escalations = run.get("escalations", [])
@@ -381,6 +440,93 @@ def _safe_ratio(numerator: float, denominator: float) -> float | None:
     return numerator / denominator
 
 
+def _infer_agent_completion(
+    *,
+    agent_id: str,
+    coordination_messages: list[dict[str, Any]],
+    normalized_run: dict[str, Any],
+    agent_count: int,
+) -> bool | None:
+    for message in coordination_messages:
+        if not isinstance(message, dict):
+            continue
+
+        if message.get("message_type") != "completion_signal":
+            continue
+
+        sender = message.get("sender")
+        source_path = str(message.get("source_path") or "")
+
+        if sender == agent_id:
+            return True
+        if source_path.endswith(f"{agent_id}.done"):
+            return True
+        if f"/{agent_id}/completed/" in source_path.replace("\\", "/"):
+            return True
+
+    if agent_count == 1 and normalized_run.get("outcome") == "completed":
+        return True
+
+    return None
+
+
+def _build_agent_records(
+    *,
+    agents: list[dict[str, Any]],
+    transcript_agents: dict[str, Any],
+    run: dict[str, Any],
+    normalized_run: dict[str, Any],
+    coordination_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    agent_stats = run.get("agent_stats", {})
+    if not isinstance(agent_stats, dict):
+        agent_stats = {}
+
+    enriched_agents: list[dict[str, Any]] = []
+    agent_count = len(agents)
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+
+        payload = dict(agent)
+        agent_id = str(payload.get("id") or "")
+        transcript_agent = transcript_agents.get(agent_id, {})
+        if not isinstance(transcript_agent, dict):
+            transcript_agent = {}
+        stats = agent_stats.get(agent_id, {})
+        if not isinstance(stats, dict):
+            stats = {}
+
+        observed_turns = stats.get("turns")
+        if not isinstance(observed_turns, int):
+            observed_turns = None
+
+        item_count = transcript_agent.get("item_count")
+        if not isinstance(item_count, int):
+            item_count = None
+
+        start_time = transcript_agent.get("start_time")
+        end_time = transcript_agent.get("end_time")
+        status = "completed" if end_time else "unknown"
+
+        payload["turn_count"] = observed_turns
+        payload["item_count"] = item_count
+        payload["start_time"] = start_time
+        payload["end_time"] = end_time
+        payload["status"] = status
+        payload["done"] = _infer_agent_completion(
+            agent_id=agent_id,
+            coordination_messages=coordination_messages,
+            normalized_run=normalized_run,
+            agent_count=agent_count,
+        )
+        payload.setdefault("exit_code", None)
+
+        enriched_agents.append(payload)
+
+    return enriched_agents
+
+
 def compute_orchestration_evals(
     transcript: dict[str, Any],
     metadata: dict[str, Any],
@@ -406,17 +552,75 @@ def compute_orchestration_evals(
         parallelism_efficiency = max(0.0, min(1.0, 1.0 - critical_path_ratio))
     avg_parallel_agents = _safe_ratio(assistant_active_seconds, wall_clock_seconds)
 
-    coordination_summary = transcript.get("coordination_summary", {})
-    coordination_total = int(
-        coordination_summary.get(
-            "total_messages",
-            len(transcript.get("coordination_messages", [])),
-        )
-        or 0
+    coordination_messages = transcript.get("coordination_messages", [])
+    if not isinstance(coordination_messages, list):
+        coordination_messages = []
+    coordination_summary = summarize_coordination_messages(
+        coordination_messages,
+        agents=transcript.get("agents", {}),
     )
-    delivery_rate = coordination_summary.get("delivery_rate")
-    if not isinstance(delivery_rate, (int, float)):
-        delivery_rate = None
+    coordination_total = int(coordination_summary.get("total_messages", 0) or 0)
+    observed_messages = coordination_summary.get("observed_messages", coordination_total)
+    if not isinstance(observed_messages, int):
+        observed_messages = coordination_total
+
+    file_backed_messages = coordination_summary.get("file_backed_messages", observed_messages)
+    if not isinstance(file_backed_messages, int):
+        file_backed_messages = observed_messages
+
+    nudge_attempts = coordination_summary.get("nudge_attempts")
+    if not isinstance(nudge_attempts, int):
+        nudge_attempts = None
+
+    nudge_delivery_rate = coordination_summary.get(
+        "nudge_delivery_rate",
+        coordination_summary.get("delivery_rate"),
+    )
+    if not isinstance(nudge_delivery_rate, (int, float)):
+        nudge_delivery_rate = None
+
+    recipient_activity_checks = coordination_summary.get("recipient_activity_checks")
+    if not isinstance(recipient_activity_checks, int):
+        recipient_activity_checks = None
+
+    recipient_activity_hits = coordination_summary.get("recipient_activity_hits")
+    if not isinstance(recipient_activity_hits, int):
+        recipient_activity_hits = None
+
+    recipient_activity_rate = coordination_summary.get("recipient_activity_rate")
+    if not isinstance(recipient_activity_rate, (int, float)):
+        recipient_activity_rate = None
+
+    messages_with_any_recipient_activity = coordination_summary.get(
+        "messages_with_any_recipient_activity"
+    )
+    if not isinstance(messages_with_any_recipient_activity, int):
+        messages_with_any_recipient_activity = None
+
+    messages_without_recipient_activity = coordination_summary.get(
+        "messages_without_recipient_activity"
+    )
+    if not isinstance(messages_without_recipient_activity, int):
+        messages_without_recipient_activity = None
+
+    by_channel = coordination_summary.get("by_channel", {})
+    if not isinstance(by_channel, dict):
+        by_channel = {}
+    by_medium = coordination_summary.get("by_medium", {})
+    if not isinstance(by_medium, dict):
+        by_medium = {}
+    by_persistence = coordination_summary.get("by_persistence", {})
+    if not isinstance(by_persistence, dict):
+        by_persistence = {}
+    by_scope = coordination_summary.get("by_scope", {})
+    if not isinstance(by_scope, dict):
+        by_scope = {}
+    by_delivery_status = coordination_summary.get("by_delivery_status", {})
+    if not isinstance(by_delivery_status, dict):
+        by_delivery_status = {}
+    by_observed_via = coordination_summary.get("by_observed_via", {})
+    if not isinstance(by_observed_via, dict):
+        by_observed_via = {}
 
     workspace_artifacts = _workspace_artifact_count(experiment_dir)
     messages_per_step = _safe_ratio(float(coordination_total), float(assistant_steps))
@@ -507,12 +711,28 @@ def compute_orchestration_evals(
         },
         "coordination_overhead": {
             "coordination_messages": coordination_total,
+            "observed_coordination_artifacts": observed_messages,
+            "file_backed_messages": file_backed_messages,
             "assistant_steps": assistant_steps,
             "workspace_artifacts": workspace_artifacts,
             "messages_per_assistant_step": messages_per_step,
             "messages_per_workspace_artifact": messages_per_artifact,
             "coordination_to_output_ratio": coord_to_output_ratio,
-            "delivery_rate": delivery_rate,
+            "nudge_attempts": nudge_attempts,
+            "nudge_delivery_rate": nudge_delivery_rate,
+            "recipient_activity_checks": recipient_activity_checks,
+            "recipient_activity_hits": recipient_activity_hits,
+            "recipient_activity_rate": recipient_activity_rate,
+            "messages_with_any_recipient_activity": messages_with_any_recipient_activity,
+            "messages_without_recipient_activity": messages_without_recipient_activity,
+            "by_channel": by_channel,
+            "by_medium": by_medium,
+            "by_persistence": by_persistence,
+            "by_scope": by_scope,
+            "by_delivery_status": by_delivery_status,
+            "by_observed_via": by_observed_via,
+            # Backward-compatible alias.
+            "delivery_rate": nudge_delivery_rate,
         },
         "escalation_precision_recall": {
             "permission_requests": len(permission_requests),
@@ -541,6 +761,9 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
     metadata = _load_json(metadata_path)
     transcript = _load_json(transcript_path)
     scores = _load_json(scores_path)
+    matrix = metadata.get("matrix")
+    if not isinstance(matrix, dict):
+        matrix = None
     benchmark_provenance = _extract_benchmark_provenance(metadata)
     task_verification, task_verification_artifact = _load_task_verification(
         experiment_dir=experiment_dir,
@@ -551,6 +774,7 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
     run = metadata.get("run", {})
     if not isinstance(run, dict):
         run = {}
+    normalized_run = normalize_run_record(run)
 
     agents = metadata.get("agents", [])
     if not isinstance(agents, list):
@@ -570,8 +794,26 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
         "start_time": transcript.get("start_time"),
         "end_time": transcript.get("end_time"),
         "per_agent_events": agent_events,
-        "coordination_summary": transcript.get("coordination_summary", {}),
+        "coordination_summary": summarize_coordination_messages(
+            transcript.get("coordination_messages", [])
+            if isinstance(transcript.get("coordination_messages", []), list)
+            else [],
+            agents=transcript.get("agents", {}),
+        ),
     }
+    enriched_agents = _build_agent_records(
+        agents=agents,
+        transcript_agents=(
+            transcript.get("agents", {}) if isinstance(transcript.get("agents", {}), dict) else {}
+        ),
+        run=run,
+        normalized_run=normalized_run,
+        coordination_messages=(
+            transcript.get("coordination_messages", [])
+            if isinstance(transcript.get("coordination_messages", []), list)
+            else []
+        ),
+    )
 
     judge_scores = None
     if scores:
@@ -615,6 +857,7 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
             "id": metadata.get("experiment_id", experiment_dir.name),
             "name": metadata.get("experiment_name", experiment_dir.name),
             "pattern": metadata.get("pattern"),
+            "matrix": matrix,
             "created_at": metadata.get("created_at"),
             "task": metadata.get("task"),
             "benchmark": benchmark_provenance,
@@ -627,13 +870,18 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
             "orchestrator": metadata.get("orchestrator"),
             "coordination": metadata.get("coordination"),
             "benchmark": metadata.get("benchmark"),
+            "matrix": matrix,
         },
         "run": {
-            "success": run.get("success"),
+            "success": normalized_run.get("success"),
+            "outcome": normalized_run.get("outcome"),
+            "termination_reason": normalized_run.get("termination_reason"),
+            "system_failure": normalized_run.get("system_failure"),
             "start_time": run.get("start_time"),
             "end_time": run.get("end_time"),
             "duration_seconds": run.get("duration_seconds"),
-            "error": run.get("error"),
+            "message": normalized_run.get("message"),
+            "error": normalized_run.get("error"),
             "benchmark": run.get("benchmark"),
             "task_verification": task_verification,
             "agent_stats": run.get("agent_stats", {}),
@@ -642,7 +890,7 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
             "orchestration_policy_trace": policy_trace,
             "stream_errors": run.get("stream_errors", {}),
         },
-        "agents": agents,
+        "agents": enriched_agents,
         "limits": limits,
         "transcript": transcript_summary,
         "evals": evals,

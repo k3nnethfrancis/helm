@@ -1,210 +1,168 @@
 # Helm — Open Questions
 
 **Status**: Working draft
-**Last updated**: 2026-02-28
+**Last updated**: 2026-03-11
 
-These are unresolved design questions surfaced during a deep review of the Helm codebase, organized by theme. Section 0 captures the research framing that governs everything else.
-
----
-
-## 0. Research Framing
-
-### The core question
-
-**Can we improve humans' visibility, control, and steerability of multi-agent AI systems?**
-
-This decomposes into two research questions:
-
-**RQ1 (Evaluation):** Can we measure visibility/control/steerability in a way that differentiates models and orchestration strategies? This means evaluating:
-- Different **single-model swarms** (all-Claude vs. all-Codex vs. all-Qwen) on the seven dimensions
-- Different **orchestration strategies** (hub-spoke vs. peer, different rule sets) on the seven dimensions
-- Both simultaneously — model × topology interactions
-
-**Key constraint**: We are studying single-model swarms, not heterogeneous multi-model systems. The same model plays orchestrator and subagent. This is both a simplification and a deliberate choice — most real-world agent systems use one model throughout.
-
-If different models and strategies produce meaningfully different scores, the dimensions are valid instruments and this is a contribution on its own.
-
-RQ1 also resolves the attribution question empirically: dimensions that move with orchestration strategy changes are orchestrator-attributable; dimensions that move with model changes are agent-attributable; both → system-level.
-
-**RQ2 (Training):** Can we train models that improve these metrics? Two sub-questions:
-
-**RQ2a — Orchestration policy:** Train a model that performs better in multi-agent coordination — as both orchestrator and subagent. Since the same model occupies all roles in the swarm, all seven dimensions are valid training signals (not just orchestrator-attributable ones). Evidence = run Helm with a swarm of the trained model, compare dimension scores before/after training.
-
-**RQ2b — Behavioral monitor:** Train a small model to detect when systems misbehave according to these dimensions in real-time. This is a **weak-to-strong supervision** claim — can a smaller, cheaper model supervise larger, more capable agents? Input is the event stream during a run. Output is dimension-level alerts. Training signal comes from judge labels on completed runs.
-
-### Implications for Helm
-
-- The evaluation and training objectives are **sequential, not competing**. Measurement is prerequisite to training. Training is an experiment within the research program.
-- The trained models are **evidence**, not products. "We measured deficits, trained on the signals, and here's what changed."
-- Helm needs to support running the **same experiment with different single-model swarms** (RQ1 compares models). This is already possible by changing the harness in YAML — no architectural change needed.
-- Helm needs to support **real-time event stream access** for the monitor model (RQ2b). Currently events flow through the collector but aren't exposed as a consumable stream for an external observer.
-- The seven dimensions serve triple duty: research instrument (RQ1), training signal (RQ2a), and supervision target (RQ2b). Their validity is load-bearing.
+These are the open questions that still matter after the recent benchmark and harness cleanup. The current center of gravity is reward validation before RL, so this file is organized around what still blocks that.
 
 ---
 
-## 1. Measurement Validity
+## 0. Current Center of Gravity
 
-### 1.1 Judge scale design
+Helm's intended reward target is:
 
-LLM judges are unreliable on continuous 1-10 scales. They anchor, compress to the middle, and produce inconsistent scores across runs. The GLM-5 multi-judge work already addressed this with panel consensus, but the underlying scale problem remains.
+**benchmark performance + behavioral dimensions + selected trace-derived signals**
 
-**Options:**
-- Switch to discrete categories (none / minor / moderate / severe)
-- Keep 1-10 for backward compatibility but bin into categories for analysis
-- Per-dimension scales (some dimensions may warrant finer grain than others)
+The open issue is not whether behavioral dimensions matter. It is whether the current dimensions are valid enough to shape optimization.
 
-**Question**: What's the right granularity per dimension? Are all seven dimensions best served by the same scale type?
+That makes the near-term question:
 
-**Implication for RQ2b**: The behavioral monitor naturally outputs discrete classifications ("is goal drift happening?"), not continuous scores. If the judge also outputs discrete categories, the monitor's training labels are directly compatible. If the judge outputs 1-10, we need a binning step that introduces arbitrary thresholds.
-
-### 1.2 Should judge scores feed into training?
-
-Currently the composite reward uses only deterministic signals (task pass/fail, parallelism efficiency, coordination overhead). LLM judge dimension scores are analysis-only — they don't enter the RL reward function.
-
-**Arguments for coupling:**
-- Behavioral dimensions capture things deterministic metrics miss (goal drift, failure suppression)
-- The dimensions are the core research contribution — if they don't shape training, what are they for?
-
-**Arguments against coupling:**
-- LLM judge scores are noisy; injecting noise into reward degrades training
-- Judge evaluates after the fact on the full transcript; reward needs to be attributable to decisions
-- Deterministic metrics are reproducible; judge scores are not
-
-**Resolution direction**: Judge scores probably shouldn't directly enter the RL reward for the orchestration policy (RQ2a). But they are the **primary** training signal for the behavioral monitor (RQ2b). Different models, different roles for the judge.
-
-### 1.3 Orchestrator vs. agent attribution — largely resolved
-
-Some behavioral dimensions may measure agent properties, not orchestration properties:
-- **Goal drift** — is this the orchestrator failing to maintain alignment, or the agent losing focus?
-- **Failure suppression** — is this the orchestrator failing to detect errors, or the agent hiding them?
-- **Context degradation** — is this an orchestration handoff problem, or an agent memory problem?
-
-**Largely resolved**: Since we're training single-model swarms (same model as orchestrator and subagent), the attribution distinction matters less for training. All seven dimensions are valid training signals — improving the model on any dimension improves the whole swarm. The attribution question becomes an empirical one answered by RQ1: vary topology (holding model constant) to see orchestration-attributable dimensions, vary model (holding topology constant) to see agent-attributable dimensions.
-
-**Still relevant for**: The behavioral monitor (RQ2b), which needs to know *what kind* of problem it's detecting to give useful alerts to the human.
+**Which current and candidate signals are stable, discriminative, and robust enough to promote from analysis into training?**
 
 ---
 
-## 2. Experimental Flexibility
+## 1. Reward Validation
 
-### 2.1 Coordination protocol is over-prescribed
+### 1.1 Judge repeatability
 
-Three layers lock in the coordination protocol:
-1. **YAML `coordination.paths`** — defines directory structure
-2. **Agent system prompts** — prescribe exactly how to use those directories (per-agent, per-pattern)
-3. **Backend `_classify_file`** — hardcoded Python mapping paths → message types → routing
+The five active dimensions are judged with an LLM:
+- `goal-drift`
+- `context-degradation`
+- `failure-suppression`
+- `escalation-calibration`
+- `resource-waste`
 
-This means you can't easily:
-- Study emergent coordination (agents figure out their own protocol)
-- Compare coordination protocols (different routing rules on the same task)
-- Add novel coordination mechanisms (voting, blackboards, gossip) without code changes
+We have not yet established how stable those labels are when judging the same rollout repeatedly.
 
-**Options:**
-- Add a generic broadcast backend (any new file → nudge all agents). Simple, enables emergent experiments.
-- Make classification configurable via YAML route rules
-- Separate nudge delivery from message classification (always nudge, classify for analysis only)
-- Do nothing — prescriptive protocol is a controlled experimental parameter, not a limitation
+**Question**: Which dimensions are repeatable enough to trust, and which need rubric revision before they become reward terms?
 
-**Question**: Is Helm studying "coordination within a protocol" or "coordination protocols themselves"? The answer determines whether this matters now or later.
+### 1.2 Sensitivity to orchestration conditions
 
-### 2.2 RuntimeGuard rule engine is limited
+The dimensions are only useful if they move when orchestration conditions change.
 
-- First-match-wins: only one rule fires per event. No composition.
-- Rule ordering matters silently — reordering rules changes behavior with no warning.
-- Only one inactivity rule supported (breaks after first `no_activity` match).
-- `if_condition` only supports `action contains "X"` syntax.
+We now have enough benchmark and non-benchmark traces to ask this properly, especially with Claude Code as the main harness.
 
-Fine for current experiments, but if we want richer intervention strategies (e.g., "approve file writes but log network access for the same permission event"), the engine can't express it.
+**Question**: Do the dimensions separate single, hub-spoke, and peer conditions on coordination-relevant tasks, or do they mostly move with transcript style and noise?
 
-**Question**: Is this a real limitation given planned experiments, or theoretical? What intervention strategies do we actually need?
+### 1.3 Within-condition variance
 
-### 2.3 Reward formula is hardcoded
+Even if the dimensions separate topologies on average, they may still be too noisy run-to-run to support training.
 
-`compute_composite_reward` uses fixed weights: 0.7 task score, 0.2 parallelism, 0.1 efficiency. Can't tune per-benchmark or per-experiment without code changes.
+**Question**: Is within-condition variance low enough that run rankings do not flip across ordinary reruns?
 
-**Options:**
-- Move weights into YAML config
-- Make the formula pluggable (named reward strategies)
-- Keep it hardcoded but document the rationale
+### 1.4 Missing-signal discovery
 
-**Question**: Do different benchmarks / topologies / research questions need different reward weightings? If so, this needs to be configurable before we run more training.
+Recent runs exposed pathologies that may matter for reward design but are not clearly covered by the five active dimensions:
+- closure failure after useful work
+- weak verification discipline
+- regression-heavy near-solves
+- poor uptake of durable coordination artifacts
 
-### 2.4 Completion verification is a placeholder
+**Question**: Which of these should become future dimensions, which should remain deterministic metrics, and which belong in benchmark-specific verifier logic?
 
-`mode: completion` just checks "did the run end cleanly?" — not "did the agent solve the problem." Real benchmark scoring requires:
-- SWE-bench: run the test suite (command mode with native harness)
-- tau-bench: run the evaluation script
-- Custom tasks: define what "success" means per-experiment
+### 1.5 Reward composition
 
-Currently the only alternative is `mode: command` with a user-provided script, but no benchmark-native verifiers are bundled.
+The current export reward is still a deterministic placeholder:
+- task score
+- parallelism
+- efficiency / overhead terms
 
-**Question**: What's the priority here? Is the training pipeline useful without real task verification, or is this blocking?
+That is useful for pipeline plumbing, but it is not the intended long-term reward.
 
-### 2.5 Cross-model experiment support
-
-RQ1 requires comparing different single-model swarms on the same task. Helm already supports this — change the `harness` field in YAML to run all agents on a different model. No mixed-model experiments needed (single-model swarms only).
-
-**Remaining gap**: System prompt templates may need adaptation per-model. A `claude-code` prompt might not work optimally for `codex` or `opencode`. May need a prompt adaptation layer or per-harness prompt variants.
-
-**Question**: How much do system prompt differences across harnesses confound the model comparison? Is this a significant threat to RQ1 validity, or can we control for it by using minimal/generic prompts?
+**Question**: Which reward mixtures remain stable under small weight changes and do not promote pathological runs?
 
 ---
 
-## 3. Strategic
+## 2. Experimental Design
 
-### 3.1 Research vs. training — resolved
+### 2.1 Slice quality
 
-~~Helm serves two purposes that pull in different directions.~~
+Some SWE-bench samples are good plumbing checks but bad orchestration experiments. The first cross-harness slice proved execution/export readiness but did not separate configurations meaningfully.
 
-**Resolved**: The evaluation and training objectives are sequential, not competing. Measurement (RQ1) is prerequisite to training (RQ2). Training is an experiment within the research program. The trained models are evidence, not products. See §0.
+**Question**: Which task features best predict that a benchmark example is coordination-relevant rather than just a single-agent coding task with extra overhead?
 
-### 3.2 What the trained models do — clarified
+### 2.2 Prompt and harness confounds
 
-Two models, not one:
+Claude Code is the main near-term path because it is the cheapest high-volume route for us, but prompt style and transcript style can still confound interpretation.
 
-| | Orchestration Policy (RQ2a) | Behavioral Monitor (RQ2b) |
-|---|---|---|
-| **What it does** | Predicts optimal orchestration decisions | Detects behavioral dimension violations |
-| **When it runs** | Before/during a run | During a run (real-time) |
-| **Input** | Task description + context | Event stream (sliding window) |
-| **Output** | Categorical policy labels (7 tags) | Dimension alerts (per-dimension classification) |
-| **Training signal** | Deterministic orchestration metrics | Judge dimension scores from completed runs |
-| **Model size** | Needs capability (makes decisions) | Can be small (weak-to-strong supervision) |
-| **Deployment** | Configures/augments RuntimeGuard | Separate observer feeding human dashboard |
-| **Evidence claim** | "RL on orchestration signals improves behavior" | "Small models can supervise large agent swarms" |
+**Question**: How much of the judged signal is about swarm behavior versus harness-specific discourse style?
 
-**Open question**: How does the orchestration policy model close the loop back into Helm? Options:
-- It configures RuntimeGuard rules before a run (prescriptive)
-- It replaces the rule engine with learned decisions (active)
-- It runs alongside and its predictions are logged + compared to what actually happened (analytical, then graduated to active)
+### 2.3 DirectCLI live intervention
 
-### 3.3 Discrete classes in RL
+True mid-run live intervention still does not exist on the DirectCLI path. That means current experiments mostly study coordination without live steering.
 
-Switching judge output to discrete categories improves measurement reliability but creates coarse reward signal. RL benefits from gradient — categorical rewards create stepped reward surfaces.
-
-**Mitigations:**
-- Large batch sizes smooth over coarseness (reward distribution across many rollouts matters, not individual gradient)
-- Deterministic metrics provide continuous interpolation within categorical bands
-- The orchestration policy environment already uses discrete match — and it works (when format compliance is solved)
-
-**Question**: Is this actually a problem in practice, or a theoretical concern? The current flat-reward blocker is about format compliance, not reward granularity.
+**Question**: Is that limitation acceptable for the reward-validation phase, or do we need a richer live-message capability before we can claim to be studying active orchestration?
 
 ---
 
-## Priority Ranking (revised)
+## 3. Training Readiness
 
-| # | Question | Blocks what? | Urgency |
+### 3.1 When do judge dimensions enter reward?
+
+The answer is no longer "never" and not yet "now."
+
+**Question**: What empirical gates should dimensions clear before they stop being analysis labels and start being reward terms?
+
+Current proposed gates:
+- repeatability
+- topology sensitivity
+- acceptable within-condition variance
+- reward robustness
+- missing-signal audit
+
+### 3.2 What is the first training target?
+
+Even after reward validation, Helm still has to choose between:
+- orchestrator-policy selection
+- orchestrator fine-tuning
+- participant fine-tuning
+- rollout-level offline RL
+
+**Question**: Which target gives the cleanest scientific claim for the first optimization experiment?
+
+### 3.3 Canonical training unit
+
+Helm can export:
+- per-agent traces
+- swarm-level rollouts
+- orchestration-oriented rows
+
+**Question**: Which of these should be the canonical unit for the first reward-coupled training pilot?
+
+---
+
+## 4. Future Dimensions
+
+### 4.1 Monitoring evasion
+
+Still important, but not yet instrumented.
+
+**Question**: What is the cleanest experimental design for measuring whether swarm behavior changes under observation without collapsing into prompt artifacts?
+
+### 4.2 Human model accuracy
+
+Also still important, but not yet operationalized.
+
+**Question**: How do we measure whether the swarm actually understands human intent rather than merely complying with the literal task text?
+
+---
+
+## Priority Ranking
+
+| # | Question | Why it matters now | Urgency |
 |---|---|---|---|
-| 1.1 | Judge scale design | Monitor training labels, measurement validity | High — discrete categories needed for RQ2b compatibility |
-| 2.3 | Reward formula hardcoded | Training flexibility | Medium — matters as soon as we run more benchmarks |
-| 2.4 | Completion verification | Benchmark validity | Medium — blocking for real SWE-bench |
-| 2.1 | Coordination over-prescribed | Experimental design | Medium — needed for topology comparison in RQ1 |
-| 2.5 | Cross-model prompt confounds | RQ1 validity | Medium — need to control for prompt differences |
-| 1.3 | Attribution | Empirical, not blocking | Low — resolved by RQ1 experimental design |
-| 1.2 | Judge in training loop? | Architecture decision | Low — resolved: judge feeds RQ2b, not RQ2a |
-| 2.2 | RuntimeGuard limitations | Complex experiments | Low — current rule sets work |
-| 3.3 | Discrete RL reward | Training quality | Low — theoretical for now |
+| 1.1 | Judge repeatability | Noisy labels should not enter reward | High |
+| 1.2 | Sensitivity to orchestration conditions | Reward terms must differentiate real conditions | High |
+| 1.4 | Missing-signal discovery | Avoid optimizing around obvious ontology gaps | High |
+| 1.5 | Reward composition | RL needs a robust objective, not a fragile guess | High |
+| 2.1 | Slice quality | Bad slices waste tokens and produce weak evidence | High |
+| 1.3 | Within-condition variance | Needed to know whether rankings are stable | Medium |
+| 2.2 | Prompt and harness confounds | Important, but Claude-first focus can defer breadth | Medium |
+| 3.2 | First training target | Important after reward validation, not before | Medium |
+| 2.3 | DirectCLI live intervention | Important, but not blocking reward validation | Low |
+| 4.1 | Monitoring evasion | Future work | Low |
+| 4.2 | Human model accuracy | Future work | Low |
 
 ---
 
--- Shoshin | 2026-02-28
+-- Shoshin | 2026-03-11

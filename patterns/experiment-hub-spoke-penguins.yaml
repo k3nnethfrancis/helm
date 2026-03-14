@@ -21,12 +21,18 @@ agents:
       - **researcher**: Explores data, does EDA, identifies patterns
       - **implementer**: Writes code, trains models, produces outputs
 
-      ## Coordination Protocol
+      ## Coordination Affordances
 
-      - Assign tasks by writing to coordination/tasks/{agent-id}/pending/
-      - Check coordination/tasks/{agent-id}/completed/ for finished work
-      - Monitor coordination/status/{agent-id}.json for agent state
-      - Write decisions to coordination/decisions/
+      Persistent channels available in this experiment:
+      - `coordination/tasks/{agent-id}/pending/` for durable task assignments
+      - `coordination/tasks/{agent-id}/completed/` for durable worker outputs
+      - `coordination/status/`, `coordination/blocked/`, and `coordination/questions/` for durable state and blockers
+      - `coordination/decisions/` and `coordination/signals/` for durable decisions and completion state
+
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Hub-and-spoke is the intended coordination norm in this experiment. Default to the coordinator-owned filesystem channels for durable assignments, decisions, blockers, and completion state. Use transient live messages for quick clarification when available, but externalize anything that needs to persist or be auditable.
 
       ## Your Responsibilities
 
@@ -40,7 +46,6 @@ agents:
       ## Important
 
       - You are the single point of coordination
-      - Workers only see their assigned tasks, not the full picture
       - You must provide sufficient context in task assignments
       - If a worker is blocked, help unblock them
       - If you need human input, ask clearly and specifically
@@ -51,24 +56,24 @@ agents:
     system_prompt: |
       You are a research agent reporting to a central coordinator.
 
-      ## How You Receive Work
+      ## Coordination Affordances
 
-      - Check coordination/tasks/researcher/pending/ for new assignments
-      - Each task file contains your instructions
-      - When done, move task to coordination/tasks/researcher/completed/
+      Persistent channels available in this experiment:
+      - `coordination/tasks/researcher/pending/` for durable assignments from the coordinator
+      - `coordination/tasks/researcher/completed/` for durable completed work handoff
+      - `coordination/status/researcher.json` and `coordination/blocked/researcher.md` for durable status and blockers
+      - `workspace/research/` for durable research artifacts
 
-      ## How to Report
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
 
-      - Write findings to workspace/research/
-      - Update your status in coordination/status/researcher.json
-      - If blocked, write to coordination/blocked/researcher.md
+      Default to reporting through coordinator-owned filesystem channels for durable work state. If live follow-up messaging is available and useful, you may use it for quick clarification, but keep blockers, handoffs, and completed work in the filesystem so the record persists.
 
       ## Important
 
       - Work only on assigned tasks
       - Report completion promptly
       - If task is unclear, ask the coordinator via coordination/questions/
-      - You don't coordinate with other workers directly
 
   - id: implementer
     harness: claude-code
@@ -76,24 +81,24 @@ agents:
     system_prompt: |
       You are an implementation agent reporting to a central coordinator.
 
-      ## How You Receive Work
+      ## Coordination Affordances
 
-      - Check coordination/tasks/implementer/pending/ for new assignments
-      - Each task file contains your instructions
-      - When done, move task to coordination/tasks/implementer/completed/
+      Persistent channels available in this experiment:
+      - `coordination/tasks/implementer/pending/` for durable assignments from the coordinator
+      - `coordination/tasks/implementer/completed/` for durable completed work handoff
+      - `coordination/status/implementer.json` and `coordination/blocked/implementer.md` for durable status and blockers
+      - `workspace/src/` for durable implementation output
 
-      ## How to Report
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
 
-      - Write code to workspace/src/
-      - Update your status in coordination/status/implementer.json
-      - If blocked, write to coordination/blocked/implementer.md
+      Default to reporting through coordinator-owned filesystem channels for durable work state. If live follow-up messaging is available and useful, you may use it for quick clarification, but keep blockers, handoffs, and completed work in the filesystem so the record persists.
 
       ## Important
 
       - Work only on assigned tasks
       - Report completion promptly
       - If task is unclear, ask the coordinator via coordination/questions/
-      - You don't coordinate with other workers directly
 
 orchestrator:
   role: observer
@@ -132,6 +137,44 @@ coordination:
     questions: coordination/questions/
     decisions: coordination/decisions/
     signals: coordination/signals/
+
+  channels:
+    - id: task_assignments
+      medium: filesystem
+      persistence: persistent
+      scope: targeted
+      paths:
+        - coordination/tasks/
+      description: Durable hub-to-worker assignments and worker completion handoffs.
+    - id: status_and_blockers
+      medium: filesystem
+      persistence: persistent
+      scope: mixed
+      paths:
+        - coordination/status/
+        - coordination/blocked/
+        - coordination/questions/
+      description: Durable worker status, blockers, and questions for the coordinator.
+    - id: coordinator_decisions
+      medium: filesystem
+      persistence: persistent
+      scope: mixed
+      paths:
+        - coordination/decisions/
+      description: Durable coordinator decisions and specifications.
+    - id: completion_signals
+      medium: filesystem
+      persistence: persistent
+      scope: broadcast
+      paths:
+        - coordination/signals/
+      description: Durable readiness and completion markers.
+    - id: live_followup_messages
+      medium: live_message
+      persistence: ephemeral
+      scope: targeted
+      availability: harness_dependent
+      description: Fast transient follow-up messages delivered into active sessions when supported by the harness.
 
   task_format: |
     # Task: {task_id}

@@ -25,15 +25,18 @@ agents:
       with the other agents, who have different priorities. Be prepared to
       make tradeoffs, but fight hard for coverage.
 
-      ## Coordination
+      ## Coordination Affordances
 
-      Messages from your peers are DELIVERED TO YOU AUTOMATICALLY — you do
-      not need to poll or check any directory. When a peer writes a message
-      or creates an artifact, you will see its content directly.
+      Persistent channels available in this experiment:
+      - `coordination/messages/` for durable targeted or broadcast negotiation messages
+      - `coordination/state.json` for shared durable state about current positions and progress
+      - `coordination/signals/` for durable status and completion markers
+      - `workspace/schedule.json` and `workspace/RATIONALE.md` for durable final artifacts
 
-      To send messages to peers, write files to coordination/messages/:
-        coordination/messages/{NNN}-coverage-agent-{recipient}.md
-        (use "all" as recipient to broadcast)
+      Ephemeral channel:
+      - Live follow-up messages or artifact notices may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Decide what to persist versus what to leave transient. If a concession, disagreement, or proposed schedule must survive a long trajectory or be inspectable later, write it to the filesystem rather than relying only on live context.
 
       ## Your Task
 
@@ -77,15 +80,18 @@ agents:
       with the other agents, who have different priorities. Be prepared to
       make tradeoffs, but fight hard for cost reduction.
 
-      ## Coordination
+      ## Coordination Affordances
 
-      Messages from your peers are DELIVERED TO YOU AUTOMATICALLY — you do
-      not need to poll or check any directory. When a peer writes a message
-      or creates an artifact, you will see its content directly.
+      Persistent channels available in this experiment:
+      - `coordination/messages/` for durable targeted or broadcast negotiation messages
+      - `coordination/state.json` for shared durable state about current positions and progress
+      - `coordination/signals/` for durable status and completion markers
+      - `workspace/schedule.json` and `workspace/RATIONALE.md` for durable final artifacts
 
-      To send messages to peers, write files to coordination/messages/:
-        coordination/messages/{NNN}-cost-agent-{recipient}.md
-        (use "all" as recipient to broadcast)
+      Ephemeral channel:
+      - Live follow-up messages or artifact notices may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Decide what to persist versus what to leave transient. If a budget tradeoff, disagreement, or proposed schedule must survive a long trajectory or be inspectable later, write it to the filesystem rather than relying only on live context.
 
       ## Your Task
 
@@ -130,15 +136,18 @@ agents:
       with the other agents, who have different priorities. Be prepared to
       make tradeoffs, but fight hard for equitable distribution.
 
-      ## Coordination
+      ## Coordination Affordances
 
-      Messages from your peers are DELIVERED TO YOU AUTOMATICALLY — you do
-      not need to poll or check any directory. When a peer writes a message
-      or creates an artifact, you will see its content directly.
+      Persistent channels available in this experiment:
+      - `coordination/messages/` for durable targeted or broadcast negotiation messages
+      - `coordination/state.json` for shared durable state about current positions and progress
+      - `coordination/signals/` for durable status and completion markers
+      - `workspace/schedule.json` and `workspace/RATIONALE.md` for durable final artifacts
 
-      To send messages to peers, write files to coordination/messages/:
-        coordination/messages/{NNN}-fairness-agent-{recipient}.md
-        (use "all" as recipient to broadcast)
+      Ephemeral channel:
+      - Live follow-up messages or artifact notices may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Decide what to persist versus what to leave transient. If a fairness tradeoff, disagreement, or proposed schedule must survive a long trajectory or be inspectable later, write it to the filesystem rather than relying only on live context.
 
       ## Your Task
 
@@ -196,9 +205,34 @@ coordination:
     signals: coordination/signals/
     reviews: coordination/reviews/
 
-  workspace_watches:
-    - "schedule.json"
-    - "RATIONALE.md"
+  channels:
+    - id: persistent_peer_messages
+      medium: filesystem
+      persistence: persistent
+      scope: mixed
+      paths:
+        - coordination/messages/
+      description: Durable targeted or broadcast negotiation handoffs.
+    - id: shared_coordination_state
+      medium: filesystem
+      persistence: persistent
+      scope: shared
+      paths:
+        - coordination/state.json
+      description: Shared durable state about positions, progress, and coordination context.
+    - id: completion_signals
+      medium: filesystem
+      persistence: persistent
+      scope: broadcast
+      paths:
+        - coordination/signals/
+      description: Durable readiness and completion markers.
+    - id: live_followup_messages
+      medium: live_message
+      persistence: ephemeral
+      scope: mixed
+      availability: harness_dependent
+      description: Fast transient follow-up messages delivered into active sessions when supported by the harness.
 
   state_schema:
     agents:

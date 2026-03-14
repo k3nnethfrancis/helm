@@ -1,7 +1,7 @@
 [project]
 name = "helm"
 version = "0.1.0"
-description = "Observation and evaluation framework for multi-agent AI systems"
+description = "Multi-agent experiment and training framework for coordination under human control"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -29,3 +29,6 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

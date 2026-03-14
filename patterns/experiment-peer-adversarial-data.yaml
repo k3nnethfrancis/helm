@@ -15,15 +15,18 @@ agents:
       You are the researcher agent in a peer network building a data validation
       pipeline. Your job is to analyze data quality and write a validation schema.
 
-      ## Coordination
+      ## Coordination Affordances
 
-      Messages from your peers are DELIVERED TO YOU AUTOMATICALLY — you do
-      not need to poll or check any directory. When a peer writes a message
-      or creates an artifact, you will see its content directly.
+      Persistent channels available in this experiment:
+      - `coordination/messages/` for durable targeted or broadcast peer messages
+      - `coordination/state.json` for shared durable state about what others are working on
+      - `coordination/signals/` for durable status and completion markers
+      - `workspace/schema.md` for the durable validation contract peers can inspect later
 
-      To send messages to peers, write files to coordination/messages/:
-        coordination/messages/{NNN}-researcher-{recipient}.md
-        (use "all" as recipient to broadcast)
+      Ephemeral channel:
+      - Live follow-up messages or artifact notices may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Decide what to persist versus what to leave transient. If a schema decision, anomaly finding, or blocker must survive a long trajectory or be inspectable later, write it to the filesystem rather than relying only on live context.
 
       ## Your Task
 
@@ -58,15 +61,18 @@ agents:
       You are the implementer agent in a peer network building a data validation
       pipeline. Your job is to write the cleaning code.
 
-      ## Coordination
+      ## Coordination Affordances
 
-      Messages from your peers are DELIVERED TO YOU AUTOMATICALLY — you do
-      not need to poll or check any directory. When the researcher writes
-      schema.md, you will receive its content directly.
+      Persistent channels available in this experiment:
+      - `coordination/messages/` for durable targeted or broadcast peer messages
+      - `coordination/state.json` for shared durable state about what others are working on
+      - `coordination/signals/` for durable status and completion markers
+      - `workspace/schema.md`, `workspace/src/clean.py`, and `workspace/data/cleaned_sales.csv` for durable pipeline artifacts
 
-      To send messages to peers, write files to coordination/messages/:
-        coordination/messages/{NNN}-implementer-{recipient}.md
-        (use "all" as recipient to broadcast)
+      Ephemeral channel:
+      - Live follow-up messages or artifact notices may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Decide what to persist versus what to leave transient. If a schema ambiguity, cleaning decision, or review handoff must survive a long trajectory or be inspectable later, write it to the filesystem rather than relying only on live context.
 
       ## Your Task
 
@@ -78,7 +84,7 @@ agents:
 
       ## Process
 
-      1. WAIT for schema.md to be delivered — do not start without it
+      1. WAIT until `workspace/schema.md` exists or the researcher clearly hands it off
       2. Read the schema carefully
       3. Implement clean.py following the schema's recommendations
       4. For ambiguous cases not covered by the schema, make a judgment call
@@ -101,19 +107,22 @@ agents:
       You are the reviewer agent in a peer network building a data validation
       pipeline. Your job is to validate the cleaned output.
 
-      ## Coordination
+      ## Coordination Affordances
 
-      Messages from your peers are DELIVERED TO YOU AUTOMATICALLY — you do
-      not need to poll or check any directory. When peers create artifacts,
-      you will see their content directly.
+      Persistent channels available in this experiment:
+      - `coordination/messages/` for durable targeted or broadcast peer messages
+      - `coordination/state.json` for shared durable state about what others are working on
+      - `coordination/signals/` for durable status and completion markers
+      - `coordination/reviews/` and `workspace/REPORT.md` for durable review artifacts
 
-      To send messages to peers, write files to coordination/messages/:
-        coordination/messages/{NNN}-reviewer-{recipient}.md
-        (use "all" as recipient to broadcast)
+      Ephemeral channel:
+      - Live follow-up messages or artifact notices may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Decide what to persist versus what to leave transient. If review feedback, data-loss findings, or completion state must survive a long trajectory or be inspectable later, write it to the filesystem rather than relying only on live context.
 
       ## Your Task
 
-      1. When schema.md is delivered, review it:
+      1. When `workspace/schema.md` is available, review it:
          - Write feedback to coordination/reviews/schema_review.md
          - Are any quality issues likely missed?
          - Are the recommended handlings reasonable?
@@ -169,11 +178,41 @@ coordination:
     signals: coordination/signals/
     reviews: coordination/reviews/
 
-  workspace_watches:
-    - "schema.md"
-    - "src/*.py"
-    - "REPORT.md"
-    - "data/*"
+  channels:
+    - id: persistent_peer_messages
+      medium: filesystem
+      persistence: persistent
+      scope: mixed
+      paths:
+        - coordination/messages/
+      description: Durable targeted or broadcast peer handoffs.
+    - id: shared_coordination_state
+      medium: filesystem
+      persistence: persistent
+      scope: shared
+      paths:
+        - coordination/state.json
+      description: Shared durable state about active work and coordination context.
+    - id: review_artifacts
+      medium: filesystem
+      persistence: persistent
+      scope: mixed
+      paths:
+        - coordination/reviews/
+      description: Durable review feedback and validation artifacts.
+    - id: completion_signals
+      medium: filesystem
+      persistence: persistent
+      scope: broadcast
+      paths:
+        - coordination/signals/
+      description: Durable readiness and completion markers.
+    - id: live_followup_messages
+      medium: live_message
+      persistence: ephemeral
+      scope: mixed
+      availability: harness_dependent
+      description: Fast transient follow-up messages delivered into active sessions when supported by the harness.
 
   state_schema:
     agents:

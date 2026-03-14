@@ -23,13 +23,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from helm.benchmarks.swebench_workspace import (
+    DEFAULT_REPO_CACHE,
+    checkout_base,
+    ensure_repo,
+    workspace_dirty_patch,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +148,16 @@ REPO_EXTRA_PACKAGES: dict[str, list[str]] = {
     "sphinx-doc/sphinx": ["Jinja2"],
 }
 
+REPO_BOOTSTRAP_PACKAGES: dict[str, list[str]] = {
+    # Older astropy releases still import setuptools.dep_util during editable builds.
+    "astropy/astropy": ["pip<24", "setuptools<70", "wheel", "extension-helpers"],
+}
+
+REPO_EDITABLE_INSTALL_ARGS: dict[str, list[str]] = {
+    # Use the bootstrapped setuptools from the env instead of an isolated latest build backend.
+    "astropy/astropy": ["--no-build-isolation"],
+}
+
 
 # ---------------------------------------------------------------------------
 # Row loading
@@ -205,6 +225,53 @@ def extract_test_files_from_patch(patch_text: str) -> list[str]:
     return files
 
 
+def extract_files_from_patch(patch_text: str) -> list[str]:
+    """Extract file paths touched by a git diff."""
+    files: list[str] = []
+    for line in patch_text.split("\n"):
+        if not line.startswith("diff --git "):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        path = parts[-1].removeprefix("b/")
+        files.append(path)
+    return files
+
+
+def strip_patch_for_paths(patch_text: str, excluded_paths: set[str]) -> str:
+    """Return a patch with file sections for excluded paths removed."""
+    if not excluded_paths:
+        return patch_text
+
+    kept_sections: list[str] = []
+    current: list[str] = []
+    keep_current = True
+
+    def flush() -> None:
+        if current and keep_current:
+            kept_sections.append("\n".join(current))
+
+    for line in patch_text.splitlines():
+        if line.startswith("diff --git "):
+            flush()
+            current = [line]
+            parts = line.split()
+            if len(parts) >= 4:
+                path = parts[-1].removeprefix("b/")
+                keep_current = path not in excluded_paths
+            else:
+                keep_current = True
+            continue
+        current.append(line)
+
+    flush()
+
+    if not kept_sections:
+        return ""
+    return "\n".join(kept_sections) + "\n"
+
+
 def resolve_test_ids(
     test_ids: list[str],
     test_files: list[str],
@@ -221,6 +288,17 @@ def resolve_test_ids(
     """
     resolved: list[str] = []
     for tid in test_ids:
+        normalized = _normalize_unittest_style_test_id(tid)
+        if normalized is not None:
+            resolved.append(normalized)
+            continue
+
+        if test_files:
+            descriptive = _resolve_descriptive_test_id(tid, test_files, repo_path)
+            if descriptive is not None:
+                resolved.append(descriptive)
+                continue
+
         if "::" in tid:
             # Already a pytest node ID
             resolved.append(tid)
@@ -259,7 +337,7 @@ def resolve_test_ids(
                 tf_path = repo_path / tf
                 if tf_path.exists():
                     try:
-                        content = tf_path.read_text()
+                        content = tf_path.read_text(errors="replace")
                         if f"def {tid}(" in content:
                             resolved.append(f"{tf}::{tid}")
                             matched = True
@@ -275,42 +353,106 @@ def resolve_test_ids(
     return resolved
 
 
-# ---------------------------------------------------------------------------
-# Repo management
-# ---------------------------------------------------------------------------
+_UNITTEST_STYLE_RE = re.compile(
+    r"^(?P<test_name>test_[\w]+)\s+\((?P<qualname>[\w.]+)\)$"
+)
 
-def ensure_repo(repo: str, cache_dir: Path) -> Path:
-    """Clone repo to cache or return existing path."""
-    # repo is like "django/django" → cache as "django__django"
-    safe_name = repo.replace("/", "__")
-    repo_path = cache_dir / safe_name
 
-    if repo_path.exists() and (repo_path / ".git").exists():
-        # Fetch latest to make sure we have the base_commit
-        result = subprocess.run(
-            ["git", "fetch", "--all", "--quiet"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"git fetch failed for cached repo {repo_path}. "
-                f"Try deleting the cache entry and re-running: rm -rf {repo_path}\n"
-                f"stderr: {result.stderr}"
-            )
-        return repo_path
+def _normalize_unittest_style_test_id(test_id: str) -> str | None:
+    """Convert unittest-style labels into dotted test paths.
 
-    repo_path.mkdir(parents=True, exist_ok=True)
-    url = f"https://github.com/{repo}.git"
-    result = subprocess.run(
-        ["git", "clone", "--quiet", url, str(repo_path)],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"git clone failed for {url}: {result.stderr}")
-    return repo_path
+    Example:
+        ``test_name (pkg.module.ClassName)`` →
+        ``pkg.module.ClassName.test_name``
+    """
+    match = _UNITTEST_STYLE_RE.match(test_id.strip())
+    if match is None:
+        return None
+    return f"{match.group('qualname')}.{match.group('test_name')}"
+
+
+def _resolve_descriptive_test_id(
+    test_id: str,
+    test_files: list[str],
+    repo_path: Path,
+) -> str | None:
+    """Map descriptive labels back to the nearest test function.
+
+    Some Django SWE-bench rows contain docstring-style descriptions instead of
+    executable test labels. Search the patched test files and return the
+    nearest enclosing dotted test path when possible.
+    """
+    needle = test_id.strip()
+    if not needle:
+        return None
+    if needle.startswith("test_"):
+        return None
+
+    for tf_path in _descriptive_test_search_paths(test_files, repo_path):
+        try:
+            lines = tf_path.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+
+        current_class: str | None = None
+        current_test: str | None = None
+        for line in lines:
+            class_match = re.match(r"^class\s+(\w+)\b", line)
+            if class_match:
+                current_class = class_match.group(1)
+                current_test = None
+                continue
+
+            test_match = re.match(r"^\s*def\s+(test_[\w]+)\s*\(", line)
+            if test_match:
+                current_test = test_match.group(1)
+
+            if needle in line and current_test:
+                module = tf_path.relative_to(repo_path).as_posix().replace("/", ".")
+                if module.endswith(".py"):
+                    module = module[:-3]
+                if current_class:
+                    return f"{module}.{current_class}.{current_test}"
+                return f"{module}.{current_test}"
+
+    return None
+
+
+def _descriptive_test_search_paths(
+    test_files: list[str],
+    repo_path: Path,
+) -> list[Path]:
+    """Return patched test files first, then broader repo test files.
+
+    Some SWE-bench rows include human-readable labels in PASS_TO_PASS that do
+    not live in the patched test files. Search those patched files first for
+    precision, then fall back to a broader test-file scan so Django-style
+    descriptive labels can still be mapped back to executable test IDs.
+    """
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add(path: Path) -> None:
+        if path in seen or not path.exists() or not path.is_file():
+            return
+        seen.add(path)
+        candidates.append(path)
+
+    for tf in test_files:
+        _add(repo_path / tf)
+
+    tests_root = repo_path / "tests"
+    if tests_root.exists():
+        for path in tests_root.rglob("*.py"):
+            _add(path)
+        return candidates
+
+    for path in repo_path.rglob("*.py"):
+        rel_parts = path.relative_to(repo_path).parts
+        if "test" in path.name.lower() or any("test" in part.lower() for part in rel_parts):
+            _add(path)
+
+    return candidates
 
 
 def make_working_copy(repo_path: Path) -> Path:
@@ -321,29 +463,18 @@ def make_working_copy(repo_path: Path) -> Path:
     return working
 
 
-def checkout_base(repo_path: Path, base_commit: str) -> None:
-    """Hard checkout to base_commit and clean."""
-    result = subprocess.run(
-        ["git", "checkout", base_commit, "--force"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"git checkout failed: {result.stderr}")
-    subprocess.run(
-        ["git", "clean", "-fdx"],
-        cwd=repo_path,
-        capture_output=True,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Patch application
 # ---------------------------------------------------------------------------
 
-def apply_patch(repo_path: Path, patch_text: str, label: str = "patch") -> None:
-    """Apply a patch via git apply."""
+def apply_patch(
+    repo_path: Path,
+    patch_text: str,
+    label: str = "patch",
+    *,
+    allow_three_way: bool = False,
+) -> None:
+    """Apply a patch via git apply, optionally retrying with a 3-way merge."""
     result = subprocess.run(
         ["git", "apply", "--verbose", "-"],
         input=patch_text,
@@ -351,14 +482,33 @@ def apply_patch(repo_path: Path, patch_text: str, label: str = "patch") -> None:
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"git apply ({label}) failed: {result.stderr}")
+    if result.returncode == 0:
+        return
+
+    if allow_three_way:
+        three_way = subprocess.run(
+            ["git", "apply", "--3way", "--verbose", "-"],
+            input=patch_text,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        if three_way.returncode == 0:
+            return
+        raise RuntimeError(
+            f"git apply ({label}) failed. "
+            f"plain stderr: {result.stderr.strip()} "
+            f"three-way stderr: {three_way.stderr.strip()}"
+        )
+
+    raise RuntimeError(f"git apply ({label}) failed: {result.stderr}")
 
 
 def find_agent_patch(experiment_dir: Path) -> str | None:
     """Find and read the agent's patch from the experiment workspace.
 
     Looks for .patch or .diff files in workspace/, or a file named 'patch'.
+    If no artifact exists, fall back to a git diff from a dirty workspace repo.
     """
     workspace = experiment_dir / "workspace"
     if not workspace.exists():
@@ -375,11 +525,11 @@ def find_agent_patch(experiment_dir: Path) -> str | None:
         candidates.append(plain_patch)
 
     if not candidates:
-        return None
+        return workspace_dirty_patch(experiment_dir)
 
     # Use the most recently modified one
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0].read_text()
+    return candidates[0].read_text(errors="replace")
 
 
 # ---------------------------------------------------------------------------
@@ -391,15 +541,310 @@ def get_python_version(repo: str, version: str) -> str:
     return PYTHON_VERSIONS.get((repo, version), DEFAULT_PYTHON)
 
 
+@dataclass(frozen=True)
+class TestEnvironment:
+    """Execution environment for SWE-bench setup and test commands."""
+
+    kind: str
+    python_version: str
+    venv_path: Path
+    docker_image: str | None = None
+
+
+def _python_version_tuple(version: str) -> tuple[int, ...]:
+    parts = []
+    for piece in version.split("."):
+        if piece.isdigit():
+            parts.append(int(piece))
+        else:
+            break
+    return tuple(parts)
+
+
+def _requires_docker_fallback(python_version: str) -> bool:
+    """Return True when the requested Python version is too old for local uv."""
+    version_tuple = _python_version_tuple(python_version)
+    return version_tuple != () and version_tuple < (3, 7)
+
+
+def _docker_available() -> bool:
+    return shutil.which("docker") is not None
+
+
+def _conda_executable() -> str | None:
+    for candidate in ("mamba", "conda"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def _conda_create_env_vars(python_version: str) -> dict[str, str]:
+    env = dict(os.environ)
+    version_tuple = _python_version_tuple(python_version)
+    if (
+        sys.platform == "darwin"
+        and platform.machine() in {"arm64", "aarch64"}
+        and version_tuple != ()
+        and version_tuple < (3, 8)
+    ):
+        env["CONDA_SUBDIR"] = "osx-64"
+    return env
+
+
+def _docker_image_for_python(python_version: str) -> str:
+    override = os.environ.get("HELM_SWEBENCH_DOCKER_IMAGE")
+    if override:
+        return override
+    return f"python:{python_version}"
+
+
+def _docker_command(
+    repo_path: Path,
+    image: str,
+    shell_command: str,
+) -> list[str]:
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{repo_path}:{repo_path}",
+        "-w",
+        str(repo_path),
+    ]
+
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        command.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+
+    command.extend([image, "/bin/sh", "-lc", shell_command])
+    return command
+
+
+def _docker_shell_prefix(venv_path: Path) -> str:
+    venv = shlex.quote(str(venv_path))
+    venv_bin = shlex.quote(str(venv_path / "bin"))
+    return f"export VIRTUAL_ENV={venv}; export PATH={venv_bin}:$PATH; "
+
+
+def _run_docker_shell(
+    repo_path: Path,
+    image: str,
+    shell_command: str,
+    *,
+    timeout: int,
+    use_venv: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    command = shell_command
+    if use_venv:
+        command = _docker_shell_prefix(repo_path / ".venv") + shell_command
+    return subprocess.run(
+        _docker_command(repo_path, image, command),
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _legacy_bootstrap_packages(python_version: str) -> list[str]:
+    version_tuple = _python_version_tuple(python_version)
+    if version_tuple != () and version_tuple < (3, 7):
+        return ["pip<22", "setuptools<60", "wheel<0.38"]
+    if version_tuple != () and version_tuple < (3, 8):
+        return ["pip<24", "setuptools<70", "wheel"]
+    return ["pip", "setuptools", "wheel"]
+
+
+def _bootstrap_packages(repo: str, python_version: str) -> list[str]:
+    return REPO_BOOTSTRAP_PACKAGES.get(repo, _legacy_bootstrap_packages(python_version))
+
+
+def _editable_install_command(prefix: list[str], repo: str) -> list[str]:
+    command = [*prefix, "install", "-e", "."]
+    command.extend(REPO_EDITABLE_INSTALL_ARGS.get(repo, []))
+    command.append("--quiet")
+    return command
+
+
+def _local_test_env_vars(venv_path: Path) -> dict[str, str]:
+    env = dict(os.environ)
+    env["VIRTUAL_ENV"] = str(venv_path)
+    env["PATH"] = f"{venv_path / 'bin'}:{env.get('PATH', '')}"
+    return env
+
+
+def _setup_conda_test_env(
+    repo_path: Path,
+    repo: str,
+    python_version: str,
+    timeout: int,
+) -> tuple[TestEnvironment | None, str | None]:
+    conda_exe = _conda_executable()
+    if conda_exe is None:
+        return None, f"Conda fallback unavailable for Python {python_version}."
+
+    venv_path = repo_path / ".venv"
+    result = subprocess.run(
+        [
+            conda_exe,
+            "create",
+            "-p",
+            str(venv_path),
+            "-c",
+            "conda-forge",
+            "--override-channels",
+            f"python={python_version}",
+            "pip",
+            "-y",
+            "-q",
+        ],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=_conda_create_env_vars(python_version),
+    )
+    if result.returncode != 0:
+        return None, f"{Path(conda_exe).name} create python={python_version} failed: {result.stderr or result.stdout}"
+
+    pip_env = _local_test_env_vars(venv_path)
+    bootstrap = _bootstrap_packages(repo, python_version)
+    setup_steps: list[tuple[str, list[str]]] = [
+        ("bootstrap packaging", ["python", "-m", "pip", "install", "--quiet", "--upgrade", *bootstrap]),
+        ("install editable repo", _editable_install_command(["python", "-m", "pip"], repo)),
+        ("install pytest", ["python", "-m", "pip", "install", "--quiet", "pytest"]),
+    ]
+
+    extras = REPO_EXTRA_PACKAGES.get(repo, [])
+    if extras:
+        setup_steps.append(
+            ("install repo extras", ["python", "-m", "pip", "install", "--quiet", *extras])
+        )
+
+    for label, command in setup_steps:
+        result = subprocess.run(
+            command,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=pip_env,
+        )
+        if result.returncode != 0:
+            return None, f"{Path(conda_exe).name} setup ({label}) failed for python {python_version}: {result.stderr or result.stdout}"
+
+    return (
+        TestEnvironment(
+            kind="conda",
+            python_version=python_version,
+            venv_path=venv_path,
+        ),
+        None,
+    )
+
+
+def _setup_docker_test_env(
+    repo_path: Path,
+    repo: str,
+    python_version: str,
+    timeout: int,
+) -> tuple[TestEnvironment | None, str | None]:
+    if not _docker_available():
+        return (
+            None,
+            f"Python {python_version} requires Docker fallback, but docker is not available.",
+        )
+
+    image = _docker_image_for_python(python_version)
+    venv_path = repo_path / ".venv"
+    test_env = TestEnvironment(
+        kind="docker",
+        python_version=python_version,
+        venv_path=venv_path,
+        docker_image=image,
+    )
+
+    setup_steps: list[tuple[str, str, bool]] = [
+        ("create venv", f"python -m venv {shlex.quote(str(venv_path))}", False),
+        (
+            "bootstrap packaging",
+            "python -m pip install --quiet --upgrade "
+            + " ".join(shlex.quote(pkg) for pkg in _bootstrap_packages(repo, python_version)),
+            True,
+        ),
+        (
+            "install editable repo",
+            " ".join(shlex.quote(part) for part in _editable_install_command(["python", "-m", "pip"], repo)),
+            True,
+        ),
+        ("install pytest", "python -m pip install --quiet pytest", True),
+    ]
+
+    extras = REPO_EXTRA_PACKAGES.get(repo, [])
+    if extras:
+        setup_steps.append(
+            (
+                "install repo extras",
+                "python -m pip install --quiet "
+                + " ".join(shlex.quote(pkg) for pkg in extras),
+                True,
+            )
+        )
+
+    for label, command, use_venv in setup_steps:
+        result = _run_docker_shell(
+            repo_path,
+            image,
+            command,
+            timeout=timeout,
+            use_venv=use_venv,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            stdout = result.stdout.strip()
+            detail = stderr or stdout or "unknown docker setup error"
+            return (
+                None,
+                f"docker setup ({label}) failed for python {python_version}: {detail}",
+            )
+
+    return test_env, None
+
+
 def setup_test_env(
     repo_path: Path,
     repo: str,
     version: str,
     timeout: int,
-) -> str | None:
-    """Create venv and install the repo + test deps. Returns error or None."""
+) -> tuple[TestEnvironment | None, str | None]:
+    """Create a test env and install repo/test deps. Returns env + error."""
     python_version = get_python_version(repo, version)
     venv_path = repo_path / ".venv"
+
+    if _requires_docker_fallback(python_version):
+        conda_env, conda_err = _setup_conda_test_env(
+            repo_path,
+            repo,
+            python_version,
+            timeout,
+        )
+        if conda_env is not None:
+            return conda_env, None
+
+        docker_env, docker_err = _setup_docker_test_env(
+            repo_path,
+            repo,
+            python_version,
+            timeout,
+        )
+        if docker_env is not None:
+            return docker_env, None
+
+        combined_errors = [err for err in (conda_err, docker_err) if err]
+        return None, " ".join(combined_errors) if combined_errors else (
+            f"No legacy Python fallback succeeded for Python {python_version}."
+        )
 
     # Create venv with the correct Python version
     result = subprocess.run(
@@ -410,13 +855,14 @@ def setup_test_env(
         timeout=timeout,
     )
     if result.returncode != 0:
-        return f"uv venv --python {python_version} failed: {result.stderr}"
+        return None, f"uv venv --python {python_version} failed: {result.stderr}"
 
-    pip_env = {**os.environ, "VIRTUAL_ENV": str(venv_path)}
+    pip_env = _local_test_env_vars(venv_path)
 
-    # Install the project in editable mode
+    bootstrap = _bootstrap_packages(repo, python_version)
+
     result = subprocess.run(
-        ["uv", "pip", "install", "-e", ".", "--quiet"],
+        ["uv", "pip", "install", "--upgrade", *bootstrap, "--quiet"],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -424,7 +870,19 @@ def setup_test_env(
         env=pip_env,
     )
     if result.returncode != 0:
-        return f"uv pip install -e . failed: {result.stderr}"
+        return None, f"uv pip bootstrap failed: {result.stderr}"
+
+    # Install the project in editable mode
+    result = subprocess.run(
+        _editable_install_command(["uv", "pip"], repo),
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=pip_env,
+    )
+    if result.returncode != 0:
+        return None, f"uv pip install -e . failed: {result.stderr}"
 
     # Install pytest (needed by most repos)
     result = subprocess.run(
@@ -436,7 +894,7 @@ def setup_test_env(
         env=pip_env,
     )
     if result.returncode != 0:
-        return f"uv pip install pytest failed: {result.stderr}"
+        return None, f"uv pip install pytest failed: {result.stderr}"
 
     # Install repo-specific extra packages
     extras = REPO_EXTRA_PACKAGES.get(repo, [])
@@ -450,9 +908,16 @@ def setup_test_env(
             env=pip_env,
         )
         if result.returncode != 0:
-            return f"uv pip install extras {extras} failed: {result.stderr}"
+            return None, f"uv pip install extras {extras} failed: {result.stderr}"
 
-    return None
+    return (
+        TestEnvironment(
+            kind="local",
+            python_version=python_version,
+            venv_path=venv_path,
+        ),
+        None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -479,12 +944,12 @@ def _pytest_arg_for_id(test_id: str) -> tuple[str, bool]:
 # Characters allowed in test IDs: alphanumeric, underscore, dot, slash,
 # colon, hyphen, square brackets (pytest parameterize). Reject anything
 # else to prevent shell injection via dataset-controlled strings.
-_SAFE_TEST_ID_RE = re.compile(r"^[\w./:\-\[\]]+$")
+_UNSAFE_TEST_ID_RE = re.compile(r"[\x00-\x1f\x7f\r\n]")
 
 
 def _sanitize_test_id(test_id: str) -> str:
-    """Validate a test ID contains no shell metacharacters."""
-    if not _SAFE_TEST_ID_RE.match(test_id):
+    """Reject control characters before shell-quoting the test identifier."""
+    if _UNSAFE_TEST_ID_RE.search(test_id):
         raise ValueError(
             f"Test ID contains disallowed characters (possible injection): {test_id!r}"
         )
@@ -495,6 +960,7 @@ def run_tests(
     repo_path: Path,
     test_ids: list[str],
     repo: str,
+    test_env: TestEnvironment,
     timeout: int,
 ) -> dict[str, bool]:
     """Run test IDs and return {test_id: passed}."""
@@ -502,10 +968,9 @@ def run_tests(
         return {}
 
     command_template = get_test_command(repo)
-    venv_path = repo_path / ".venv"
-    venv_bin = venv_path / "bin"
+    venv_bin = test_env.venv_path / "bin"
 
-    env = {**os.environ, "VIRTUAL_ENV": str(venv_path)}
+    env = {**os.environ, "VIRTUAL_ENV": str(test_env.venv_path)}
     env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
 
     results: dict[str, bool] = {}
@@ -514,26 +979,36 @@ def run_tests(
     for test_id in test_ids:
         safe_id = _sanitize_test_id(test_id)
         arg, uses_keyword = _pytest_arg_for_id(safe_id)
+        quoted_arg = shlex.quote(arg)
 
         if uses_keyword and "pytest" in command_template:
             # Use -k for keyword matching on bare names
-            command = command_template.replace("{test_ids}", f"-k {arg}")
+            command = command_template.replace("{test_ids}", f"-k {quoted_arg}")
         else:
-            command = command_template.replace("{test_ids}", arg)
+            command = command_template.replace("{test_ids}", quoted_arg)
 
         try:
             # shell=True is required for repo-specific commands that use
             # shell syntax (e.g. sympy's PYTHONWARNINGS='...' env prefix).
             # Test IDs are sanitized above to prevent injection.
-            proc = subprocess.run(
-                command,
-                shell=True,
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=env,
-            )
+            if test_env.kind == "docker":
+                proc = _run_docker_shell(
+                    repo_path,
+                    test_env.docker_image or _docker_image_for_python(test_env.python_version),
+                    command,
+                    timeout=timeout,
+                    use_venv=True,
+                )
+            else:
+                proc = subprocess.run(
+                    command,
+                    shell=True,
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=env,
+                )
             results[test_id] = proc.returncode == 0
         except subprocess.TimeoutExpired:
             results[test_id] = False
@@ -549,8 +1024,10 @@ def compute_verification(
     fail_to_pass_results: dict[str, bool],
     pass_to_pass_results: dict[str, bool],
     setup_error: str | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """Compute the final verification payload from test results."""
+    warning_list = warnings or []
     if setup_error is not None:
         return {
             "status": "fail",
@@ -564,6 +1041,7 @@ def compute_verification(
                 "swebench_resolved": False,
                 "partial_score": 0.0,
                 "setup_error": setup_error,
+                "warnings": warning_list,
             },
         }
 
@@ -611,6 +1089,7 @@ def compute_verification(
             "swebench_resolved": resolved,
             "partial_score": round(partial_score, 4),
             "setup_error": None,
+            "warnings": warning_list,
         },
     }
 
@@ -629,7 +1108,7 @@ def main() -> int:
     parser.add_argument(
         "--repo-cache",
         type=Path,
-        default=Path("~/.cache/helm/swebench-repos").expanduser(),
+        default=DEFAULT_REPO_CACHE,
     )
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--id-field", default="instance_id")
@@ -646,6 +1125,7 @@ def main() -> int:
         return 3
 
     working_copy: Path | None = None
+    warnings: list[str] = []
 
     try:
         # 1. Load the dataset row
@@ -685,25 +1165,71 @@ def main() -> int:
         # 7. Apply agent's changes
         agent_patch = find_agent_patch(args.experiment_dir)
         if agent_patch:
-            apply_patch(working_copy, agent_patch, label="agent_patch")
+            try:
+                apply_patch(
+                    working_copy,
+                    agent_patch,
+                    label="agent_patch",
+                    allow_three_way=True,
+                )
+            except RuntimeError:
+                overlapping_test_files = set(test_files) & set(extract_files_from_patch(agent_patch))
+                filtered_patch = strip_patch_for_paths(agent_patch, set(test_files))
+                if overlapping_test_files and filtered_patch.strip():
+                    apply_patch(
+                        working_copy,
+                        filtered_patch,
+                        label="agent_patch_without_benchmark_tests",
+                        allow_three_way=True,
+                    )
+                    warnings.append(
+                        "Ignored agent edits to benchmark-owned test files during verification: "
+                        + ", ".join(sorted(overlapping_test_files))
+                    )
+                elif overlapping_test_files:
+                    warnings.append(
+                        "Ignored agent patch because it only modified benchmark-owned test files: "
+                        + ", ".join(sorted(overlapping_test_files))
+                    )
+                else:
+                    raise
 
         # 8. Resolve bare test IDs to pytest node IDs
         fail_to_pass = resolve_test_ids(fail_to_pass, test_files, working_copy)
         pass_to_pass = resolve_test_ids(pass_to_pass, test_files, working_copy)
 
         # 9. Setup test environment
-        setup_err = setup_test_env(working_copy, repo, version, timeout=args.timeout)
+        test_env, setup_err = setup_test_env(
+            working_copy,
+            repo,
+            version,
+            timeout=args.timeout,
+        )
         if setup_err:
-            result = compute_verification({}, {}, setup_error=setup_err)
+            result = compute_verification({}, {}, setup_error=setup_err, warnings=warnings)
             print(json.dumps(result))
             return 2
+        if test_env is None:
+            return _emit_error("setup_test_env returned no environment and no error")
 
         # 10. Run tests
-        f2p_results = run_tests(working_copy, fail_to_pass, repo, timeout=args.timeout)
-        p2p_results = run_tests(working_copy, pass_to_pass, repo, timeout=args.timeout)
+        f2p_results = run_tests(
+            working_copy,
+            fail_to_pass,
+            repo,
+            test_env=test_env,
+            timeout=args.timeout,
+        )
+        p2p_results = run_tests(
+            working_copy,
+            pass_to_pass,
+            repo,
+            test_env=test_env,
+            timeout=args.timeout,
+        )
 
         # 11. Compute and emit result
-        result = compute_verification(f2p_results, p2p_results)
+        result = compute_verification(f2p_results, p2p_results, warnings=warnings)
         print(json.dumps(result))
 
         if result["status"] == "pass":

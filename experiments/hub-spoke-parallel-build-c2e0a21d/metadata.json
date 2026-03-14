@@ -53,6 +53,10 @@
       "stats-worker": {
         "turns": 78
       }
-    }
+    },
+    "outcome": "completed",
+    "termination_reason": "completion_signal",
+    "system_failure": false,
+    "message": "Run reached completion signals."
   }
 }

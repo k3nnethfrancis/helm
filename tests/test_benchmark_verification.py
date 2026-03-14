@@ -34,6 +34,31 @@ def test_completion_verification_pass(tmp_path: Path) -> None:
     assert verification.score == 1.0
 
 
+def test_completion_verification_incomplete_run_is_not_called_system_failure(
+    tmp_path: Path,
+) -> None:
+    benchmark = BenchmarkConfig(
+        adapter="swebench",
+        dataset_path="/tmp/data.jsonl",
+        verifier={"mode": "completion"},
+    )
+    verification = verify_benchmark_run(
+        benchmark=benchmark,
+        example=_example(),
+        experiment_dir=tmp_path,
+        run_success=False,
+        run_error=None,
+        run_outcome="incomplete",
+        run_message="Turn limit reached before completion signals were observed.",
+        run_system_failure=False,
+    )
+    assert verification.status == "fail"
+    assert verification.score == 0.0
+    assert "ended incomplete before completion signals" in str(verification.reason)
+    assert verification.details["run_outcome"] == "incomplete"
+    assert verification.details["run_system_failure"] is False
+
+
 def test_command_verification_uses_exit_code(tmp_path: Path) -> None:
     benchmark = BenchmarkConfig(
         adapter="tau-bench",
@@ -81,6 +106,42 @@ def test_command_verification_parses_json_stdout(tmp_path: Path) -> None:
     assert verification.status == "partial"
     assert verification.score == 0.25
     assert verification.reason == "ok"
+
+
+def test_command_verification_runs_from_caller_working_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "project"
+    script_dir = project_root / "scripts"
+    script_dir.mkdir(parents=True)
+    script = script_dir / "verify.sh"
+    script.write_text("#!/bin/sh\nprintf '{\"status\":\"pass\",\"score\":1.0}'\n")
+    script.chmod(0o755)
+
+    experiment_dir = tmp_path / "experiment"
+    experiment_dir.mkdir()
+
+    monkeypatch.chdir(project_root)
+
+    benchmark = BenchmarkConfig(
+        adapter="swebench",
+        dataset_path="data/unused.jsonl",
+        verifier={
+            "mode": "command",
+            "command": "sh scripts/verify.sh",
+        },
+    )
+    verification = verify_benchmark_run(
+        benchmark=benchmark,
+        example=_example(),
+        experiment_dir=experiment_dir,
+        run_success=False,
+        run_error=None,
+    )
+    assert verification.status == "pass"
+    assert verification.score == 1.0
+    assert verification.details["working_dir"] == str(project_root)
 
 
 def test_write_task_verification_creates_standard_artifact(tmp_path: Path) -> None:

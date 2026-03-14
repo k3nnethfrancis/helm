@@ -2,6 +2,7 @@
 
 from helm.benchmarks.base import BenchmarkAdapter, BenchmarkExample
 from helm.benchmarks.exporter import (
+    build_per_agent_training_records,
     build_training_record,
     compute_composite_reward,
     extract_last_assistant_text,
@@ -23,6 +24,7 @@ from helm.benchmarks.verification import (
 __all__ = [
     "BenchmarkAdapter",
     "BenchmarkExample",
+    "build_per_agent_training_records",
     "BenchmarkRunPlanEntry",
     "TaskVerification",
     "available_adapters",

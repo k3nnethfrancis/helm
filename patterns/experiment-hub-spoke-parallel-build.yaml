@@ -33,13 +33,18 @@ agents:
       work. Part of your job is to discover these overlaps and coordinate
       accordingly. Do not assume the work is fully independent.
 
-      ## Coordination Protocol
+      ## Coordination Affordances
 
-      - Assign tasks by writing to coordination/tasks/{agent-id}/pending/
-      - Check coordination/tasks/{agent-id}/completed/ for finished work
-      - Monitor coordination/status/{agent-id}.json for agent state
-      - Write decisions to coordination/decisions/
-      - If workers are blocked, check coordination/blocked/
+      Persistent channels available in this experiment:
+      - `coordination/tasks/{agent-id}/pending/` for durable task assignments
+      - `coordination/tasks/{agent-id}/completed/` for durable worker outputs
+      - `coordination/status/`, `coordination/blocked/`, and `coordination/questions/` for durable state and blockers
+      - `coordination/decisions/` and `coordination/signals/` for durable decisions and completion state
+
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Hub-and-spoke is the intended coordination norm in this experiment. Default to the coordinator-owned filesystem channels for durable assignments, decisions, blockers, and completion state. Use transient live messages for quick clarification when available, but externalize anything that needs to persist or be auditable.
 
       ## Your Responsibilities
 
@@ -55,7 +60,6 @@ agents:
       ## Important
 
       - You are the single point of coordination
-      - Workers only see their assigned tasks, not the full picture
       - Provide sufficient context in task assignments
       - If a worker is blocked, help unblock them
       - If you need human input, ask clearly via coordination/questions/
@@ -67,11 +71,18 @@ agents:
       You are a worker agent reporting to a central orchestrator. You build
       one subcommand for a CLI tool called `filekit`.
 
-      ## How You Receive Work
+      ## Coordination Affordances
 
-      - Check coordination/tasks/find-worker/pending/ for new assignments
-      - Each task file contains your instructions
-      - When done, move task to coordination/tasks/find-worker/completed/
+      Persistent channels available in this experiment:
+      - `coordination/tasks/find-worker/pending/` for durable assignments from the orchestrator
+      - `coordination/tasks/find-worker/completed/` for durable completed work handoff
+      - `coordination/status/find-worker.json` and `coordination/blocked/find-worker.md` for durable status and blockers
+      - `workspace/src/` for durable implementation output
+
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Default to reporting through orchestrator-owned filesystem channels for durable work state. If live follow-up messaging is available and useful, you may use it for quick clarification, but keep blockers, handoffs, and completed work in the filesystem so the record persists.
 
       ## Your Subcommand: filekit find
 
@@ -89,18 +100,11 @@ agents:
       - Handle permission errors gracefully (skip and warn)
       - Support content matching (search inside files) with --content flag
 
-      ## How to Report
-
-      - Write code to workspace/src/find.py
-      - Update your status in coordination/status/find-worker.json
-      - If blocked, write to coordination/blocked/find-worker.md
-      - If task is unclear, ask the coordinator via coordination/questions/
-
       ## Important
 
       - Work only on assigned tasks
       - Report completion promptly
-      - You don't coordinate with other workers directly
+      - Prefer orchestrator-mediated durable handoffs; use live follow-up messaging only for brief clarification when available
 
   - id: dedupe-worker
     harness: claude-code
@@ -109,11 +113,18 @@ agents:
       You are a worker agent reporting to a central orchestrator. You build
       one subcommand for a CLI tool called `filekit`.
 
-      ## How You Receive Work
+      ## Coordination Affordances
 
-      - Check coordination/tasks/dedupe-worker/pending/ for new assignments
-      - Each task file contains your instructions
-      - When done, move task to coordination/tasks/dedupe-worker/completed/
+      Persistent channels available in this experiment:
+      - `coordination/tasks/dedupe-worker/pending/` for durable assignments from the orchestrator
+      - `coordination/tasks/dedupe-worker/completed/` for durable completed work handoff
+      - `coordination/status/dedupe-worker.json` and `coordination/blocked/dedupe-worker.md` for durable status and blockers
+      - `workspace/src/` for durable implementation output
+
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Default to reporting through orchestrator-owned filesystem channels for durable work state. If live follow-up messaging is available and useful, you may use it for quick clarification, but keep blockers, handoffs, and completed work in the filesystem so the record persists.
 
       ## Your Subcommand: filekit dedupe
 
@@ -132,18 +143,11 @@ agents:
       - Handle permission errors gracefully (skip and warn)
       - Show progress for large directories
 
-      ## How to Report
-
-      - Write code to workspace/src/dedupe.py
-      - Update your status in coordination/status/dedupe-worker.json
-      - If blocked, write to coordination/blocked/dedupe-worker.md
-      - If task is unclear, ask the coordinator via coordination/questions/
-
       ## Important
 
       - Work only on assigned tasks
       - Report completion promptly
-      - You don't coordinate with other workers directly
+      - Prefer orchestrator-mediated durable handoffs; use live follow-up messaging only for brief clarification when available
 
   - id: rename-worker
     harness: claude-code
@@ -152,11 +156,18 @@ agents:
       You are a worker agent reporting to a central orchestrator. You build
       one subcommand for a CLI tool called `filekit`.
 
-      ## How You Receive Work
+      ## Coordination Affordances
 
-      - Check coordination/tasks/rename-worker/pending/ for new assignments
-      - Each task file contains your instructions
-      - When done, move task to coordination/tasks/rename-worker/completed/
+      Persistent channels available in this experiment:
+      - `coordination/tasks/rename-worker/pending/` for durable assignments from the orchestrator
+      - `coordination/tasks/rename-worker/completed/` for durable completed work handoff
+      - `coordination/status/rename-worker.json` and `coordination/blocked/rename-worker.md` for durable status and blockers
+      - `workspace/src/` for durable implementation output
+
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Default to reporting through orchestrator-owned filesystem channels for durable work state. If live follow-up messaging is available and useful, you may use it for quick clarification, but keep blockers, handoffs, and completed work in the filesystem so the record persists.
 
       ## Your Subcommand: filekit rename
 
@@ -180,18 +191,11 @@ agents:
       - Define color/style constants (even if not used immediately)
       - This module should be importable by other subcommands
 
-      ## How to Report
-
-      - Write code to workspace/src/rename.py and workspace/src/output.py
-      - Update your status in coordination/status/rename-worker.json
-      - If blocked, write to coordination/blocked/rename-worker.md
-      - If task is unclear, ask the coordinator via coordination/questions/
-
       ## Important
 
       - Work only on assigned tasks
       - Report completion promptly
-      - You don't coordinate with other workers directly
+      - Prefer orchestrator-mediated durable handoffs; use live follow-up messaging only for brief clarification when available
 
   - id: stats-worker
     harness: claude-code
@@ -200,11 +204,18 @@ agents:
       You are a worker agent reporting to a central orchestrator. You build
       one subcommand for a CLI tool called `filekit`.
 
-      ## How You Receive Work
+      ## Coordination Affordances
 
-      - Check coordination/tasks/stats-worker/pending/ for new assignments
-      - Each task file contains your instructions
-      - When done, move task to coordination/tasks/stats-worker/completed/
+      Persistent channels available in this experiment:
+      - `coordination/tasks/stats-worker/pending/` for durable assignments from the orchestrator
+      - `coordination/tasks/stats-worker/completed/` for durable completed work handoff
+      - `coordination/status/stats-worker.json` and `coordination/blocked/stats-worker.md` for durable status and blockers
+      - `workspace/src/` for durable implementation output
+
+      Ephemeral channel:
+      - Live follow-up messages may arrive in this session when the harness/runtime supports them. They are fast but may fall out of context.
+
+      Default to reporting through orchestrator-owned filesystem channels for durable work state. If live follow-up messaging is available and useful, you may use it for quick clarification, but keep blockers, handoffs, and completed work in the filesystem so the record persists.
 
       ## Your Subcommand: filekit stats
 
@@ -223,18 +234,11 @@ agents:
         otherwise implement basic formatting inline
       - Group statistics logically (size stats, type stats, duplicate stats)
 
-      ## How to Report
-
-      - Write code to workspace/src/stats.py
-      - Update your status in coordination/status/stats-worker.json
-      - If blocked, write to coordination/blocked/stats-worker.md
-      - If task is unclear, ask the coordinator via coordination/questions/
-
       ## Important
 
       - Work only on assigned tasks
       - Report completion promptly
-      - You don't coordinate with other workers directly
+      - Prefer orchestrator-mediated durable handoffs; use live follow-up messaging only for brief clarification when available
 
 orchestrator:
   role: observer
@@ -274,6 +278,44 @@ coordination:
     questions: coordination/questions/
     decisions: coordination/decisions/
     signals: coordination/signals/
+
+  channels:
+    - id: task_assignments
+      medium: filesystem
+      persistence: persistent
+      scope: targeted
+      paths:
+        - coordination/tasks/
+      description: Durable hub-to-worker assignments and worker completion handoffs.
+    - id: status_and_blockers
+      medium: filesystem
+      persistence: persistent
+      scope: mixed
+      paths:
+        - coordination/status/
+        - coordination/blocked/
+        - coordination/questions/
+      description: Durable worker status, blockers, and questions for the orchestrator.
+    - id: coordinator_decisions
+      medium: filesystem
+      persistence: persistent
+      scope: mixed
+      paths:
+        - coordination/decisions/
+      description: Durable orchestrator decisions and shared specifications.
+    - id: completion_signals
+      medium: filesystem
+      persistence: persistent
+      scope: broadcast
+      paths:
+        - coordination/signals/
+      description: Durable readiness and completion markers.
+    - id: live_followup_messages
+      medium: live_message
+      persistence: ephemeral
+      scope: targeted
+      availability: harness_dependent
+      description: Fast transient follow-up messages delivered into active sessions when supported by the harness.
 
   task_format: |
     # Task: {task_id}

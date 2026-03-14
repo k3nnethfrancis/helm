@@ -1,0 +1,192 @@
+{
+  "matrix_id": "swebench_architecture_phase1",
+  "description": "Phase 1 factorized architecture matrix for Helm. Claude-first, SWE-bench-first, with architecture family, swarm size, and task structure as controlled variables.",
+  "manifest_path": "/Users/kenneth/Desktop/lab/projects/helm/configs/matrices/swebench_architecture_phase1.yaml",
+  "output_root": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1",
+  "generated_at": "2026-03-13T21:48:52.056829",
+  "defaults": {
+    "prompt_family": "swebench_claude_matrix_v1",
+    "direct_cli": true,
+    "on_turn_limit": "end",
+    "dimensions": [
+      "escalation-calibration",
+      "goal-drift",
+      "failure-suppression",
+      "context-degradation",
+      "resource-waste"
+    ]
+  },
+  "conditions": [
+    {
+      "wave": "wave0",
+      "condition_id": "wave0-single-1-decomposable_cross_module-anchor",
+      "pattern_path": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1/swebench-architecture-phase1-wave0-single-1-decomposable-cross-module.yaml",
+      "name": "swebench-architecture-phase1-wave0-single-1-decomposable-cross-module",
+      "description": "single architecture, swarm size 1, task pack decomposable_cross_module (decomposable_cross_module), examples: sympy__sympy-17630",
+      "runtime_pattern": "single-agent",
+      "example_ids": [
+        "sympy__sympy-17630"
+      ],
+      "matrix_id": "swebench_architecture_phase1",
+      "architecture_family": "single",
+      "swarm_size": 1,
+      "task_pack": "decomposable_cross_module",
+      "task_structure": "decomposable_cross_module",
+      "prompt_family": "swebench_claude_matrix_v1",
+      "coordination_family": "single_solver_persistent_v1",
+      "summary_path": "/Users/kenneth/Desktop/lab/projects/helm/experiments/benchmark-runs/swebench-architecture-phase1-wave0-single-1-decomposable-cross-module-20260313-215433.json"
+    },
+    {
+      "wave": "wave0",
+      "condition_id": "wave0-independent-2-decomposable_cross_module-anchor",
+      "pattern_path": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1/swebench-architecture-phase1-wave0-independent-2-decomposable-cross-module.yaml",
+      "name": "swebench-architecture-phase1-wave0-independent-2-decomposable-cross-module",
+      "description": "independent architecture, swarm size 2, task pack decomposable_cross_module (decomposable_cross_module), examples: sympy__sympy-17630",
+      "runtime_pattern": "hub-and-spoke",
+      "example_ids": [
+        "sympy__sympy-17630"
+      ],
+      "matrix_id": "swebench_architecture_phase1",
+      "architecture_family": "independent",
+      "swarm_size": 2,
+      "task_pack": "decomposable_cross_module",
+      "task_structure": "decomposable_cross_module",
+      "prompt_family": "swebench_claude_matrix_v1",
+      "coordination_family": "independent_selector_v1",
+      "summary_path": "/Users/kenneth/Desktop/lab/projects/helm/experiments/benchmark-runs/swebench-architecture-phase1-wave0-independent-2-decomposable-cross-module-20260313-220128.json"
+    },
+    {
+      "wave": "wave0",
+      "condition_id": "wave0-independent-3-decomposable_cross_module-anchor",
+      "pattern_path": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1/swebench-architecture-phase1-wave0-independent-3-decomposable-cross-module.yaml",
+      "name": "swebench-architecture-phase1-wave0-independent-3-decomposable-cross-module",
+      "description": "independent architecture, swarm size 3, task pack decomposable_cross_module (decomposable_cross_module), examples: sympy__sympy-17630",
+      "runtime_pattern": "hub-and-spoke",
+      "example_ids": [
+        "sympy__sympy-17630"
+      ],
+      "matrix_id": "swebench_architecture_phase1",
+      "architecture_family": "independent",
+      "swarm_size": 3,
+      "task_pack": "decomposable_cross_module",
+      "task_structure": "decomposable_cross_module",
+      "prompt_family": "swebench_claude_matrix_v1",
+      "coordination_family": "independent_selector_v1",
+      "summary_path": "/Users/kenneth/Desktop/lab/projects/helm/experiments/benchmark-runs/swebench-architecture-phase1-wave0-independent-3-decomposable-cross-module-20260313-221059.json"
+    },
+    {
+      "wave": "wave0",
+      "condition_id": "wave0-centralized-2-decomposable_cross_module-anchor",
+      "pattern_path": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1/swebench-architecture-phase1-wave0-centralized-2-decomposable-cross-module.yaml",
+      "name": "swebench-architecture-phase1-wave0-centralized-2-decomposable-cross-module",
+      "description": "centralized architecture, swarm size 2, task pack decomposable_cross_module (decomposable_cross_module), examples: sympy__sympy-17630",
+      "runtime_pattern": "hub-and-spoke",
+      "example_ids": [
+        "sympy__sympy-17630"
+      ],
+      "matrix_id": "swebench_architecture_phase1",
+      "architecture_family": "centralized",
+      "swarm_size": 2,
+      "task_pack": "decomposable_cross_module",
+      "task_structure": "decomposable_cross_module",
+      "prompt_family": "swebench_claude_matrix_v1",
+      "coordination_family": "centralized_hub_v1",
+      "summary_path": "/Users/kenneth/Desktop/lab/projects/helm/experiments/benchmark-runs/swebench-architecture-phase1-wave0-centralized-2-decomposable-cross-module-20260313-221652.json"
+    },
+    {
+      "wave": "wave0",
+      "condition_id": "wave0-centralized-3-decomposable_cross_module-anchor",
+      "pattern_path": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1/swebench-architecture-phase1-wave0-centralized-3-decomposable-cross-module.yaml",
+      "name": "swebench-architecture-phase1-wave0-centralized-3-decomposable-cross-module",
+      "description": "centralized architecture, swarm size 3, task pack decomposable_cross_module (decomposable_cross_module), examples: sympy__sympy-17630",
+      "runtime_pattern": "hub-and-spoke",
+      "example_ids": [
+        "sympy__sympy-17630"
+      ],
+      "matrix_id": "swebench_architecture_phase1",
+      "architecture_family": "centralized",
+      "swarm_size": 3,
+      "task_pack": "decomposable_cross_module",
+      "task_structure": "decomposable_cross_module",
+      "prompt_family": "swebench_claude_matrix_v1",
+      "coordination_family": "centralized_hub_v1",
+      "summary_path": "/Users/kenneth/Desktop/lab/projects/helm/experiments/benchmark-runs/swebench-architecture-phase1-wave0-centralized-3-decomposable-cross-module-20260313-222225.json"
+    },
+    {
+      "wave": "wave0",
+      "condition_id": "wave0-decentralized-2-decomposable_cross_module-anchor",
+      "pattern_path": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1/swebench-architecture-phase1-wave0-decentralized-2-decomposable-cross-module.yaml",
+      "name": "swebench-architecture-phase1-wave0-decentralized-2-decomposable-cross-module",
+      "description": "decentralized architecture, swarm size 2, task pack decomposable_cross_module (decomposable_cross_module), examples: sympy__sympy-17630",
+      "runtime_pattern": "peer-network",
+      "example_ids": [
+        "sympy__sympy-17630"
+      ],
+      "matrix_id": "swebench_architecture_phase1",
+      "architecture_family": "decentralized",
+      "swarm_size": 2,
+      "task_pack": "decomposable_cross_module",
+      "task_structure": "decomposable_cross_module",
+      "prompt_family": "swebench_claude_matrix_v1",
+      "coordination_family": "peer_network_v1",
+      "summary_path": "/Users/kenneth/Desktop/lab/projects/helm/experiments/benchmark-runs/swebench-architecture-phase1-wave0-decentralized-2-decomposable-cross-module-20260313-222721.json"
+    },
+    {
+      "wave": "wave0",
+      "condition_id": "wave0-decentralized-3-decomposable_cross_module-anchor",
+      "pattern_path": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1/swebench-architecture-phase1-wave0-decentralized-3-decomposable-cross-module.yaml",
+      "name": "swebench-architecture-phase1-wave0-decentralized-3-decomposable-cross-module",
+      "description": "decentralized architecture, swarm size 3, task pack decomposable_cross_module (decomposable_cross_module), examples: sympy__sympy-17630",
+      "runtime_pattern": "peer-network",
+      "example_ids": [
+        "sympy__sympy-17630"
+      ],
+      "matrix_id": "swebench_architecture_phase1",
+      "architecture_family": "decentralized",
+      "swarm_size": 3,
+      "task_pack": "decomposable_cross_module",
+      "task_structure": "decomposable_cross_module",
+      "prompt_family": "swebench_claude_matrix_v1",
+      "coordination_family": "peer_network_v1",
+      "summary_path": "/Users/kenneth/Desktop/lab/projects/helm/experiments/benchmark-runs/swebench-architecture-phase1-wave0-decentralized-3-decomposable-cross-module-20260313-223157.json"
+    },
+    {
+      "wave": "wave0",
+      "condition_id": "wave0-hybrid-2-decomposable_cross_module-anchor",
+      "pattern_path": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1/swebench-architecture-phase1-wave0-hybrid-2-decomposable-cross-module.yaml",
+      "name": "swebench-architecture-phase1-wave0-hybrid-2-decomposable-cross-module",
+      "description": "hybrid architecture, swarm size 2, task pack decomposable_cross_module (decomposable_cross_module), examples: sympy__sympy-17630",
+      "runtime_pattern": "hub-and-spoke",
+      "example_ids": [
+        "sympy__sympy-17630"
+      ],
+      "matrix_id": "swebench_architecture_phase1",
+      "architecture_family": "hybrid",
+      "swarm_size": 2,
+      "task_pack": "decomposable_cross_module",
+      "task_structure": "decomposable_cross_module",
+      "prompt_family": "swebench_claude_matrix_v1",
+      "coordination_family": "hybrid_hub_lateral_review_v1",
+      "summary_path": "/Users/kenneth/Desktop/lab/projects/helm/experiments/benchmark-runs/swebench-architecture-phase1-wave0-hybrid-2-decomposable-cross-module-20260313-223812.json"
+    },
+    {
+      "wave": "wave0",
+      "condition_id": "wave0-hybrid-3-decomposable_cross_module-anchor",
+      "pattern_path": "/Users/kenneth/Desktop/lab/projects/helm/patterns/generated/swebench_architecture_phase1/swebench-architecture-phase1-wave0-hybrid-3-decomposable-cross-module.yaml",
+      "name": "swebench-architecture-phase1-wave0-hybrid-3-decomposable-cross-module",
+      "description": "hybrid architecture, swarm size 3, task pack decomposable_cross_module (decomposable_cross_module), examples: sympy__sympy-17630",
+      "runtime_pattern": "hub-and-spoke",
+      "example_ids": [
+        "sympy__sympy-17630"
+      ],
+      "matrix_id": "swebench_architecture_phase1",
+      "architecture_family": "hybrid",
+      "swarm_size": 3,
+      "task_pack": "decomposable_cross_module",
+      "task_structure": "decomposable_cross_module",
+      "prompt_family": "swebench_claude_matrix_v1",
+      "coordination_family": "hybrid_hub_lateral_review_v1",
+      "summary_path": "/Users/kenneth/Desktop/lab/projects/helm/experiments/benchmark-runs/swebench-architecture-phase1-wave0-hybrid-3-decomposable-cross-module-20260313-224445.json"
+    }
+  ]
+}

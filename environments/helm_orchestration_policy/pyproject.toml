@@ -2,7 +2,7 @@
 name = "helm-orchestration-policy"
 description = "Train/evaluate orchestration policy outputs from Helm benchmark exports."
 tags = ["helm", "orchestration", "multi-agent", "train", "eval"]
-version = "0.2.0"
+version = "0.3.0"
 requires-python = ">=3.10"
 dependencies = [
     "datasets>=2.20.0",

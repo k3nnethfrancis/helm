@@ -1,0 +1,131 @@
+matrix_id: swebench_architecture_phase1
+description: >-
+  Phase 1 factorized architecture matrix for Helm. Claude-first, SWE-bench-first,
+  with architecture family, swarm size, and task structure as controlled variables.
+output_root: patterns/generated/swebench_architecture_phase1
+
+defaults:
+  harness: claude-code
+  model: claude-opus-4-6
+  prompt_family: swebench_claude_matrix_v1
+  dimensions:
+    - escalation-calibration
+    - goal-drift
+    - failure-suppression
+    - context-degradation
+    - resource-waste
+  judge_backend: sdk
+  benchmark:
+    adapter: swebench
+    id: princeton-nlp/SWE-bench_Verified
+    dataset_path: data/swe_bench_verified.jsonl
+    split: null
+    verifier:
+      mode: command
+      command: >-
+        python scripts/verify_swebench.py
+        --instance-id {example_id}
+        --experiment-dir {experiment_dir}
+        --dataset-path {dataset_path}
+        --timeout 300
+      pass_exit_codes: [0]
+  single_limits:
+    max_duration: 30m
+    max_turns_per_agent: 60
+    max_budget_usd: 15.0
+  multi_agent_limits:
+    max_duration: 45m
+    max_turns_per_agent: 60
+    max_budget_usd: 25.0
+  direct_cli: true
+  on_turn_limit: end
+
+task_packs:
+  decomposable_cross_module:
+    task_structure: decomposable_cross_module
+    rationale: >-
+      Tasks where decomposition, cross-file search, or durable intermediate analysis
+      are plausibly useful, and where Helm has already shown stable verifier behavior.
+    primary_examples:
+      - example_id: sympy__sympy-17630
+        rationale: Known-stable SymPy anchor already used in Helm closure studies.
+      - example_id: sympy__sympy-21930
+        rationale: Second stable SymPy case that previously exposed closure variance.
+      - example_id: django__django-13195
+        rationale: Prior topology-sensitive Django near-solve with meaningful coordination signal.
+      - example_id: pytest-dev__pytest-5809
+        rationale: Non-Django stable verifier path with useful repo-search surface.
+    backup_examples:
+      - example_id: matplotlib__matplotlib-23412
+        rationale: Stable non-Django backup with broader module context than a one-file smoke fix.
+
+  sequential_local:
+    task_structure: sequential_local
+    rationale: >-
+      Tasks where later steps depend tightly on earlier state, so extra agents may add
+      overhead without commensurate decomposition benefit.
+    primary_examples:
+      - example_id: django__django-12754
+        rationale: Previously used local Django slice with weaker decomposition benefit.
+      - example_id: matplotlib__matplotlib-23412
+        rationale: Localized plotting/task surface for comparing swarm overhead.
+      - example_id: sphinx-doc__sphinx-8638
+        rationale: Narrower Sphinx fix path that helps test sequential verification discipline.
+      - example_id: pytest-dev__pytest-7205
+        rationale: Smaller pytest slice for comparing swarm overhead on more sequential work.
+    backup_examples:
+      - example_id: matplotlib__matplotlib-25775
+        rationale: Backup localized non-Django case with an already stable verifier path.
+
+waves:
+  wave0:
+    families:
+      - single
+      - independent
+      - centralized
+      - decentralized
+      - hybrid
+    sizes: [1, 2, 3]
+    anchor_pack: decomposable_cross_module
+    anchor_example_id: sympy__sympy-17630
+    notes: >-
+      Smoke the matrix substrate with a known-stable SymPy anchor. Run single@1 and
+      all non-single families at 2 and 3.
+
+  wave1:
+    families:
+      - single
+      - independent
+      - centralized
+      - decentralized
+      - hybrid
+    sizes: [1, 2, 3, 5]
+    pack_examples:
+      decomposable_cross_module: 1
+      sequential_local: 1
+    notes: >-
+      Pilot matrix over one example from each task pack to validate the family
+      definitions before broad execution.
+
+  wave2:
+    families:
+      - single
+      - independent
+      - centralized
+      - decentralized
+      - hybrid
+    sizes: [1, 2, 3, 5]
+    pack_examples:
+      decomposable_cross_module: all
+      sequential_local: all
+    notes: >-
+      Breadth matrix over all primary examples in both task packs. Eight-agent
+      conditions stay gated until smaller sizes prove interpretable.
+
+  wave3:
+    families: []
+    sizes: []
+    notes: >-
+      Targeted follow-up only. No blanket replication; rerun only conditions that
+      expose reward-shaping significance, instability, or suspicious benchmark-flat
+      but behavior-different results.

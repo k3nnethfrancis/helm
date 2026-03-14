@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from helm.coordination.base import CoordinationMessage, MessageType
+from helm.coordination.base import CoordinationMessage, DeliveryStatus, MessageType
 from helm.coordination.filesystem_nudge import FilesystemNudgeBackend
 
 
@@ -37,7 +37,14 @@ def test_coordination_message_to_dict_is_lossless() -> None:
         message_type=MessageType.PEER_MESSAGE,
         content="x" * 1200,
         source_path="messages/long.md",
+        channel_id="persistent_peer_messages",
+        channel_medium="filesystem",
+        channel_persistence="persistent",
+        channel_scope="mixed",
+        channel_availability="always",
+        observed_via="filesystem_poll",
         delivered=True,
+        delivery_status=DeliveryStatus.DELIVERED,
         delivery_timestamp=datetime.now(),
         nudge_text="y" * 2200,
     )
@@ -45,11 +52,42 @@ def test_coordination_message_to_dict_is_lossless() -> None:
     payload = msg.to_dict()
     assert payload["content"] == "x" * 1200
     assert payload["nudge_text"] == "y" * 2200
+    assert payload["channel_id"] == "persistent_peer_messages"
+    assert payload["channel_medium"] == "filesystem"
+    assert payload["delivery_status"] == "delivered"
+
+
+def test_get_prompt_instructions_does_not_inject_runtime_coordination_policy(tmp_path) -> None:
+    backend = FilesystemNudgeBackend()
+    config = {
+        "paths": {
+            "base": "coordination/",
+            "tasks": "coordination/tasks/",
+            "status": "coordination/status/",
+            "blocked": "coordination/blocked/",
+            "questions": "coordination/questions/",
+            "signals": "coordination/signals/",
+        },
+        "agent_roles": {
+            "coordinator": "hub",
+            "worker-a": "worker",
+        },
+        "hub_agent_id": "coordinator",
+    }
+
+    asyncio.run(backend.setup(tmp_path, ["coordinator", "worker-a"], config))
+    assert backend.get_prompt_instructions("worker-a") == ""
 
 
 class _FakeSDK:
+    def __init__(self, *, supports_follow_up: bool = True) -> None:
+        self.supports_follow_up = supports_follow_up
+
     async def post_message(self, session_id: str, message: str) -> None:
         return None
+
+    def supports_follow_up_messages(self, session_id: str) -> bool:
+        return self.supports_follow_up
 
 
 def test_stop_watching_flushes_last_coordination_files(tmp_path) -> None:
@@ -126,3 +164,58 @@ def test_is_complete_uses_base_signals_fallback_when_not_configured(tmp_path) ->
     (signals_dir / "done").write_text("done\n")
 
     assert backend.is_complete(["agent-a"])
+
+
+def test_workspace_broadcast_not_marked_delivered_when_follow_up_messages_unsupported(
+    tmp_path,
+) -> None:
+    async def _run() -> CoordinationMessage:
+        backend = FilesystemNudgeBackend()
+        config = {
+            "paths": {
+                "base": "coordination/",
+                "messages": "coordination/messages/",
+            },
+            "channels": [
+                {
+                    "id": "workspace_artifacts",
+                    "medium": "filesystem",
+                    "persistence": "persistent",
+                    "scope": "broadcast",
+                    "availability": "always",
+                    "paths": ["workspace/"],
+                }
+            ],
+            "workspace_watches": ["*.txt"],
+        }
+        await backend.setup(tmp_path, ["agent-a", "agent-b"], config)
+        backend._sdk = _FakeSDK(supports_follow_up=False)
+        backend._agent_sessions = {
+            "agent-a": "session-a",
+            "agent-b": "session-b",
+        }
+
+        seen: list[CoordinationMessage] = []
+        backend._on_message = seen.append
+
+        artifact = tmp_path / "workspace" / "artifact.txt"
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("ready\n")
+
+        await backend._handle_workspace_file(artifact, deliver_nudges=True)
+        return seen[0]
+
+    message = asyncio.run(_run())
+    assert message.delivered is False
+    assert message.delivery_status == DeliveryStatus.FAILED
+    assert message.channel_id == "workspace_artifacts"
+    assert message.channel_medium == "filesystem"
+    assert message.channel_persistence == "persistent"
+    assert message.channel_scope == "broadcast"
+    assert message.observed_via == "workspace_watch"
+    assert message.metadata["delivery_attempted_to"] == ["agent-a", "agent-b"]
+    assert message.metadata["delivered_to"] == []
+    assert message.metadata["delivery_failures"] == {
+        "agent-a": "follow_up_messages_unsupported",
+        "agent-b": "follow_up_messages_unsupported",
+    }

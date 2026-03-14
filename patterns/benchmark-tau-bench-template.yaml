@@ -40,9 +40,11 @@ benchmark:
 
 evaluation:
   dimensions:
+    - escalation-calibration
     - goal-drift
     - context-degradation
-    - escalation-calibration
+    - failure-suppression
+    - resource-waste
   judge:
     backend: sdk
 

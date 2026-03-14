@@ -26,6 +26,15 @@ class MessageType(str, Enum):
     NUDGE = "nudge"
 
 
+class DeliveryStatus(str, Enum):
+    """Delivery state for transient live follow-up messages."""
+
+    NOT_ATTEMPTED = "not_attempted"
+    DELIVERED = "delivered"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 @dataclass
 class CoordinationMessage:
     """A single coordination event observed by the backend."""
@@ -36,7 +45,14 @@ class CoordinationMessage:
     message_type: MessageType
     content: str
     source_path: str | None = None
+    channel_id: str | None = None
+    channel_medium: str | None = None
+    channel_persistence: str | None = None
+    channel_scope: str | None = None
+    channel_availability: str | None = None
+    observed_via: str | None = None
     delivered: bool = False
+    delivery_status: DeliveryStatus = DeliveryStatus.NOT_ATTEMPTED
     delivery_timestamp: datetime | None = None
     nudge_text: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -50,7 +66,14 @@ class CoordinationMessage:
             # Keep full payload for offline analysis/training.
             "content": self.content,
             "source_path": self.source_path,
+            "channel_id": self.channel_id,
+            "channel_medium": self.channel_medium,
+            "channel_persistence": self.channel_persistence,
+            "channel_scope": self.channel_scope,
+            "channel_availability": self.channel_availability,
+            "observed_via": self.observed_via,
             "delivered": self.delivered,
+            "delivery_status": self.delivery_status.value,
             "delivery_timestamp": (
                 self.delivery_timestamp.isoformat() if self.delivery_timestamp else None
             ),

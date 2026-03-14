@@ -14,13 +14,14 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
 from helm.benchmarks import (
     available_adapters,
     build_orchestration_training_row,
+    build_per_agent_training_records,
     build_training_record,
     build_benchmark_run_plan,
     get_adapter,
@@ -31,21 +32,181 @@ from helm.benchmarks import (
 from helm.config import ExperimentConfig
 from helm.experiment import run_experiment, run_experiment_with_config
 from helm.run_data import save_run_data
+from helm.run_outcomes import backfill_metadata_file, merge_normalized_run_record
 from helm.sdk import SDKEvent
 
 app = typer.Typer(
     name="helm",
-    help="Observation and evaluation framework for multi-agent AI systems",
+    help="Multi-agent experiment and training framework for coordination under human control",
     no_args_is_help=True,
 )
 benchmark_app = typer.Typer(help="Benchmark adapter utilities")
 app.add_typer(benchmark_app, name="benchmark")
 
-DEFAULT_JUDGE_DIMENSIONS = [
+ACTIVE_BEHAVIORAL_DIMENSIONS = [
     "escalation-calibration",
     "goal-drift",
     "failure-suppression",
+    "context-degradation",
+    "resource-waste",
 ]
+
+DEFAULT_JUDGE_DIMENSIONS = ACTIVE_BEHAVIORAL_DIMENSIONS.copy()
+
+DIMENSION_SHORT_LABELS = {
+    "escalation-calibration": "EC",
+    "goal-drift": "GD",
+    "failure-suppression": "FS",
+    "context-degradation": "CD",
+    "resource-waste": "RW",
+}
+
+MATRIX_FIELD_NAMES = [
+    "matrix_id",
+    "condition_id",
+    "architecture_family",
+    "swarm_size",
+    "task_pack",
+    "task_structure",
+    "prompt_family",
+    "coordination_family",
+]
+
+
+def _merge_dimensions(
+    configured: list[str] | None,
+    baseline: list[str],
+) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    for dim in baseline:
+        clean = dim.strip()
+        if not clean or clean in seen:
+            continue
+        ordered.append(clean)
+        seen.add(clean)
+
+    for dim in configured or []:
+        clean = str(dim).strip()
+        if not clean or clean in seen:
+            continue
+        ordered.append(clean)
+        seen.add(clean)
+
+    return ordered
+
+
+def _effective_benchmark_dimensions(config: ExperimentConfig) -> list[str]:
+    return _merge_dimensions(config.evaluation.dimensions, ACTIVE_BEHAVIORAL_DIMENSIONS)
+
+
+def _build_judge_backend_from_config(judge_config) -> tuple[object, str, str | None]:
+    from helm.judge import OpenRouterJudge, SDKJudge
+
+    backend_name = (
+        judge_config.backend.value
+        if hasattr(judge_config.backend, "value")
+        else str(judge_config.backend)
+    )
+    if backend_name == "openrouter":
+        judge_model = judge_config.model or "google/gemini-2.0-flash-001"
+        return OpenRouterJudge(model=judge_model), backend_name, judge_model
+    return SDKJudge(), "sdk", None
+
+
+def _judge_benchmark_experiment(
+    experiment_dir: Path,
+    config: ExperimentConfig,
+    dimensions: list[str],
+) -> tuple[Path, dict[str, dict[str, str]]]:
+    from helm.judge import judge_experiment
+
+    helm_dir = Path(__file__).parent.parent.parent
+    judges_dir = helm_dir / "judges"
+    if not judges_dir.exists():
+        judges_dir = Path.cwd() / "judges"
+    if not judges_dir.exists():
+        raise FileNotFoundError("judges/ directory not found")
+
+    judge_backend, backend_name, model_name = _build_judge_backend_from_config(
+        config.evaluation.judge
+    )
+    scores = asyncio.run(
+        judge_experiment(
+            experiment_dir=experiment_dir,
+            dimensions=dimensions,
+            judges_dir=judges_dir,
+            backend=judge_backend,
+            backend_name=backend_name,
+            model_name=model_name,
+        )
+    )
+
+    scores_path = experiment_dir / "scores.json"
+    scores.save(scores_path)
+    save_run_data(experiment_dir)
+
+    score_summary = {
+        score.dimension: {
+            "category": score.category,
+            "severity": score.severity,
+        }
+        for score in scores.scores
+    }
+    return scores_path, score_summary
+
+
+def _load_dimension_categories(
+    run_data: dict[str, Any],
+    fallback_scores: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    judge = run_data.get("evals", {}).get("judge", {})
+    scores = judge.get("scores", {}) if isinstance(judge, dict) else {}
+    categories: dict[str, str] = {}
+
+    if isinstance(scores, dict):
+        for dim, payload in scores.items():
+            if not isinstance(payload, dict):
+                continue
+            category = payload.get("category")
+            if isinstance(category, str) and category.strip():
+                categories[dim] = category.strip()
+
+    if categories or not isinstance(fallback_scores, dict):
+        return categories
+
+    for dim, payload in fallback_scores.items():
+        if not isinstance(payload, dict):
+            continue
+        category = payload.get("category")
+        if isinstance(category, str) and category.strip():
+            categories[dim] = category.strip()
+    return categories
+
+
+def _compact_behavior_profile(
+    categories: dict[str, str],
+    dimensions: list[str],
+) -> str:
+    parts: list[str] = []
+    for dim in dimensions:
+        category = categories.get(dim)
+        if not category:
+            continue
+        label = DIMENSION_SHORT_LABELS.get(dim, dim)
+        parts.append(f"{label}={category}")
+    return ", ".join(parts) if parts else "n/a"
+
+
+def _matrix_payload(config: ExperimentConfig) -> dict[str, Any] | None:
+    return config.matrix_metadata()
+
+
+def _flatten_matrix_fields(matrix: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(matrix, dict):
+        return {field: None for field in MATRIX_FIELD_NAMES}
+    return {field: matrix.get(field) for field in MATRIX_FIELD_NAMES}
 
 
 def _prime_config_field_not_set(output: str, field_name: str) -> bool:
@@ -123,10 +284,23 @@ def _resolve_turn_limit_handler(on_turn_limit: str | None) -> callable:
 
 def _print_run_result(result) -> None:
     """Print a consistent summary for a finished run result."""
-    if result.success:
+    if result.outcome == "completed":
         typer.echo(f"✓ Experiment completed: {result.experiment_id}")
+    elif result.outcome == "paused":
+        typer.echo(
+            f"⚠ Experiment paused: {result.message or result.termination_reason}"
+        )
+    elif result.outcome == "incomplete":
+        typer.echo(
+            f"⚠ Experiment ended incomplete: {result.message or result.termination_reason}"
+        )
     else:
-        typer.echo(f"✗ Experiment failed: {result.error}")
+        typer.echo(f"✗ Experiment failed: {result.error or result.message}")
+
+    typer.echo(
+        f"  Outcome: {result.outcome} ({result.termination_reason})"
+        + (" [system failure]" if result.system_failure else "")
+    )
 
     typer.echo(f"  Duration: {(result.end_time - result.start_time).total_seconds():.1f}s")
 
@@ -174,6 +348,19 @@ def get_default_paths() -> tuple[Path, Path]:
         experiments_dir = Path.cwd() / "experiments"
 
     return sdk_binary, experiments_dir
+
+
+def _metadata_backed_experiment_dirs(experiments_dir: Path) -> list[Path]:
+    """Return experiment directories that contain canonical metadata."""
+    return sorted(
+        (
+            path
+            for path in experiments_dir.iterdir()
+            if path.is_dir() and (path / "metadata.json").exists()
+        ),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
 
 
 @app.command("readiness")
@@ -403,14 +590,29 @@ def run_benchmark_examples(
             help="Action when agent hits turn limit: continue, kill, end (default: interactive prompt)",
         ),
     ] = None,
+    direct_cli: Annotated[
+        bool | None,
+        typer.Option(
+            "--direct-cli/--no-direct-cli",
+            help="Use claude CLI directly instead of SDK daemon (auto-detected for claude harness)",
+        ),
+    ] = None,
+    judge_after: Annotated[
+        bool,
+        typer.Option(
+            "--judge-after/--no-judge-after",
+            help="Judge each benchmark run on the active behavioral dimensions after verification",
+        ),
+    ] = True,
 ) -> None:
     """Run a sampled set of benchmark examples from a benchmark-enabled pattern."""
     default_sdk, default_experiments = get_default_paths()
     sdk_path = sdk_binary or default_sdk
     exp_dir = experiments_dir or default_experiments
-    if not sdk_path.exists():
+    if direct_cli is not True and not sdk_path.exists():
         typer.echo(f"Error: SDK binary not found at {sdk_path}", err=True)
         typer.echo("Install with: npm install -g sandbox-agent", err=True)
+        typer.echo("Or use --direct-cli to bypass the SDK daemon", err=True)
         raise typer.Exit(1)
 
     config = ExperimentConfig.from_yaml(pattern)
@@ -441,6 +643,11 @@ def run_benchmark_examples(
     typer.echo(f"Split: {config.benchmark.split or 'n/a'}")
     typer.echo(f"Seed: {config.benchmark.seed if config.benchmark.seed is not None else 'n/a'}")
     typer.echo(f"Examples: {len(plan)}")
+    if judge_after:
+        typer.echo(
+            "Behavioral judging: "
+            + ", ".join(_effective_benchmark_dimensions(config))
+        )
     typer.echo()
 
     results_summary: list[dict[str, object]] = []
@@ -458,6 +665,7 @@ def run_benchmark_examples(
                     experiments_dir=exp_dir,
                     on_escalate=notify_escalation,
                     on_turn_limit=turn_limit_handler,
+                    use_direct_cli=direct_cli,
                 )
             )
         except KeyboardInterrupt:
@@ -474,6 +682,10 @@ def run_benchmark_examples(
         verification_score = None
         verification_reason = None
         verification_path = None
+        judge_dimensions: list[str] = []
+        judge_scores = None
+        judge_scores_path = None
+        judge_error = None
         if entry.config.benchmark is not None:
             verification = verify_benchmark_run(
                 benchmark=entry.config.benchmark,
@@ -481,6 +693,9 @@ def run_benchmark_examples(
                 experiment_dir=run_dir,
                 run_success=result.success,
                 run_error=result.error,
+                run_outcome=result.outcome,
+                run_message=result.message,
+                run_system_failure=result.system_failure,
             )
             verification_path = write_task_verification(run_dir, verification)
             save_run_data(run_dir)
@@ -499,13 +714,44 @@ def run_benchmark_examples(
                 typer.echo(f"  Verification note: {verification.reason}")
             typer.echo(f"  Verification artifact: {verification_path}")
 
+        if judge_after:
+            judge_dimensions = _effective_benchmark_dimensions(entry.config)
+            try:
+                judge_scores_path, judge_scores = _judge_benchmark_experiment(
+                    experiment_dir=run_dir,
+                    config=entry.config,
+                    dimensions=judge_dimensions,
+                )
+                typer.echo(
+                    "  Behavioral profile: "
+                    + _compact_behavior_profile(
+                        {
+                            dim: payload.get("category", "")
+                            for dim, payload in (judge_scores or {}).items()
+                            if isinstance(payload, dict)
+                        },
+                        judge_dimensions,
+                    )
+                )
+                typer.echo(f"  Judge artifact: {judge_scores_path}")
+            except Exception as e:
+                judge_error = str(e)
+                typer.echo(f"  Warning: behavioral judging failed: {e}")
+
         typer.echo()
 
         results_summary.append(
             {
                 "example_id": entry.example.example_id,
                 "experiment_id": result.experiment_id,
+                "pattern": entry.config.topology_label(),
+                "matrix": _matrix_payload(entry.config),
+                **_flatten_matrix_fields(_matrix_payload(entry.config)),
                 "success": result.success,
+                "outcome": result.outcome,
+                "termination_reason": result.termination_reason,
+                "system_failure": result.system_failure,
+                "message": result.message,
                 "error": result.error,
                 "duration_seconds": (result.end_time - result.start_time).total_seconds(),
                 "task_verification_status": verification_status,
@@ -514,6 +760,12 @@ def run_benchmark_examples(
                 "task_verification_path": (
                     str(verification_path) if verification_path is not None else None
                 ),
+                "judge_dimensions": judge_dimensions,
+                "judge_scores": judge_scores,
+                "judge_scores_path": (
+                    str(judge_scores_path) if judge_scores_path is not None else None
+                ),
+                "judge_error": judge_error,
             }
         )
 
@@ -538,6 +790,7 @@ def run_benchmark_examples(
 
     summary_payload = {
         "pattern": str(pattern),
+        "matrix": _matrix_payload(config),
         "benchmark": {
             "adapter": config.benchmark.adapter,
             "id": config.benchmark.benchmark_id,
@@ -546,6 +799,9 @@ def run_benchmark_examples(
             "seed": config.benchmark.seed,
             "verifier_mode": config.benchmark.verifier_mode(),
             "sample_size": len(plan),
+            "judge_dimensions": (
+                _effective_benchmark_dimensions(config) if judge_after else []
+            ),
         },
         "results": results_summary,
     }
@@ -556,10 +812,10 @@ def run_benchmark_examples(
 
 @benchmark_app.command("report")
 def benchmark_report(
-    summary: Annotated[
-        Path,
+    summaries: Annotated[
+        list[Path],
         typer.Argument(
-            help="Path to benchmark summary JSON from `helm benchmark run`",
+            help="One or more benchmark summary JSON files from `helm benchmark run`",
             exists=True,
             dir_okay=False,
         ),
@@ -582,49 +838,84 @@ def benchmark_report(
         Path | None,
         typer.Option(
             "--experiments-dir",
-            help="Directory containing experiment runs (defaults from summary path)",
+            help="Directory containing experiment runs (defaults from each summary path)",
         ),
     ] = None,
 ) -> None:
-    """Generate a baseline report table from a benchmark run summary."""
-    with open(summary) as f:
-        payload = json.load(f)
-
-    results = payload.get("results", [])
-    if not isinstance(results, list) or not results:
-        typer.echo("Error: summary contains no results.", err=True)
+    """Generate a baseline report table from one or more benchmark summaries."""
+    if not summaries:
+        typer.echo("Error: provide at least one summary.", err=True)
         raise typer.Exit(1)
 
-    experiments_root = experiments_dir or summary.parent.parent
-
+    configured_judge_dimensions: list[str] = []
     rows: list[dict[str, object]] = []
-    for result in results:
-        if not isinstance(result, dict):
-            continue
-        experiment_id = result.get("experiment_id")
-        if not isinstance(experiment_id, str):
-            continue
+    for summary in summaries:
+        with open(summary) as f:
+            payload = json.load(f)
 
-        run_data_path = experiments_root / experiment_id / "run_data.json"
-        run_data = {}
-        if run_data_path.exists():
-            with open(run_data_path) as f:
-                loaded = json.load(f)
-            if isinstance(loaded, dict):
-                run_data = loaded
+        results = payload.get("results", [])
+        if not isinstance(results, list) or not results:
+            typer.echo(f"Error: summary contains no results: {summary}", err=True)
+            raise typer.Exit(1)
 
-        orchestration = run_data.get("evals", {}).get("orchestration", {})
-        parallel = orchestration.get("parallelism_efficiency", {}).get("value")
-        coord_ratio = orchestration.get("coordination_overhead", {}).get(
-            "coordination_to_output_ratio"
+        benchmark_info = payload.get("benchmark", {})
+        if isinstance(benchmark_info, dict):
+            dims = benchmark_info.get("judge_dimensions", [])
+            if isinstance(dims, list):
+                configured_judge_dimensions = _merge_dimensions(
+                    [str(dim).strip() for dim in dims if str(dim).strip()],
+                    configured_judge_dimensions,
+                )
+
+        judge_dimensions = _merge_dimensions(
+            configured_judge_dimensions,
+            ACTIVE_BEHAVIORAL_DIMENSIONS,
         )
-        task_verification = run_data.get("run", {}).get("task_verification", {})
+        experiments_root = experiments_dir or summary.parent.parent
 
-        rows.append(
-            {
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            experiment_id = result.get("experiment_id")
+            if not isinstance(experiment_id, str):
+                continue
+
+            run_data_path = experiments_root / experiment_id / "run_data.json"
+            run_data = {}
+            if run_data_path.exists():
+                with open(run_data_path) as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    run_data = loaded
+
+            orchestration = run_data.get("evals", {}).get("orchestration", {})
+            parallel = orchestration.get("parallelism_efficiency", {}).get("value")
+            coord_ratio = orchestration.get("coordination_overhead", {}).get(
+                "coordination_to_output_ratio"
+            )
+            task_verification = run_data.get("run", {}).get("task_verification", {})
+            judge_categories = _load_dimension_categories(
+                run_data,
+                result.get("judge_scores") if isinstance(result, dict) else None,
+            )
+            pattern = run_data.get("experiment", {}).get("pattern")
+            if not isinstance(pattern, str):
+                pattern = result.get("pattern")
+            matrix = run_data.get("experiment", {}).get("matrix")
+            if not isinstance(matrix, dict):
+                candidate_matrix = result.get("matrix")
+                matrix = candidate_matrix if isinstance(candidate_matrix, dict) else None
+
+            row: dict[str, object] = {
                 "example_id": result.get("example_id"),
                 "experiment_id": experiment_id,
+                "pattern": pattern,
+                "matrix": matrix,
+                "summary_source": str(summary),
                 "run_success": result.get("success"),
+                "run_outcome": result.get("outcome"),
+                "termination_reason": result.get("termination_reason"),
+                "system_failure": result.get("system_failure"),
                 "duration_seconds": result.get("duration_seconds"),
                 "task_verification_status": (
                     task_verification.get("status")
@@ -638,8 +929,20 @@ def benchmark_report(
                 ),
                 "parallelism_efficiency": parallel,
                 "coordination_to_output_ratio": coord_ratio,
+                "behavior_profile": _compact_behavior_profile(
+                    judge_categories,
+                    judge_dimensions,
+                ),
             }
-        )
+            row.update(_flatten_matrix_fields(matrix))
+            for dim in judge_dimensions:
+                row[dim] = judge_categories.get(dim)
+            rows.append(row)
+
+    judge_dimensions = _merge_dimensions(
+        configured_judge_dimensions,
+        ACTIVE_BEHAVIORAL_DIMENSIONS,
+    )
 
     def _avg(values: list[float | int | None]) -> float | None:
         filtered = [float(v) for v in values if isinstance(v, (int, float))]
@@ -668,17 +971,30 @@ def benchmark_report(
         raise typer.Exit(1)
 
     if format == "csv":
-        out_path = output or summary.with_suffix(".report.csv")
+        if output is not None:
+            out_path = output
+        elif len(summaries) == 1:
+            out_path = summaries[0].with_suffix(".report.csv")
+        else:
+            out_path = summaries[0].parent / "benchmark-compare.report.csv"
         fieldnames = [
             "example_id",
             "experiment_id",
+            "pattern",
+            *MATRIX_FIELD_NAMES,
+            "summary_source",
             "run_success",
+            "run_outcome",
+            "termination_reason",
+            "system_failure",
             "task_verification_status",
             "task_verification_score",
             "parallelism_efficiency",
             "coordination_to_output_ratio",
+            "behavior_profile",
             "duration_seconds",
         ]
+        fieldnames.extend(judge_dimensions)
         with open(out_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -690,16 +1006,24 @@ def benchmark_report(
     lines = [
         "# Benchmark Report",
         "",
-        f"- Summary source: `{summary}`",
+        (
+            f"- Summary source: `{summaries[0]}`"
+            if len(summaries) == 1
+            else f"- Summary sources: {len(summaries)}"
+        ),
         f"- Completed runs: {completed}",
         f"- Run success rate: {(succeeded / completed * 100):.1f}%",
         f"- Verification pass rate: {(verified_pass / completed * 100):.1f}%",
         f"- Average task score: {avg_task_score:.3f}" if avg_task_score is not None else "- Average task score: n/a",
         f"- Average parallelism efficiency: {avg_parallel:.3f}" if avg_parallel is not None else "- Average parallelism efficiency: n/a",
         f"- Average coordination-to-output ratio: {avg_coord_ratio:.3f}" if avg_coord_ratio is not None else "- Average coordination-to-output ratio: n/a",
+        "- Behavioral profile legend: "
+        + ", ".join(
+            f"{DIMENSION_SHORT_LABELS.get(dim, dim)}={dim}" for dim in judge_dimensions
+        ),
         "",
-        "| example_id | experiment_id | run_success | verify_status | verify_score | parallelism | coord_to_output | duration_s |",
-        "|---|---|---:|---|---:|---:|---:|---:|",
+        "| example_id | pattern | experiment_id | run_success | run_outcome | reason | verify_status | verify_score | behavior_profile | parallelism | coord_to_output | duration_s |",
+        "|---|---|---|---:|---|---|---|---:|---|---:|---:|---:|",
     ]
     for row in rows:
         verify_score = row.get("task_verification_score")
@@ -725,14 +1049,62 @@ def benchmark_report(
         lines.append(
             "| "
             + f"{row.get('example_id', 'n/a')} | "
+            + f"{row.get('pattern', 'n/a')} | "
             + f"{row.get('experiment_id', 'n/a')} | "
             + f"{row.get('run_success', 'n/a')} | "
+            + f"{row.get('run_outcome', 'n/a')} | "
+            + f"{row.get('termination_reason', 'n/a')} | "
             + f"{row.get('task_verification_status', 'n/a')} | "
             + f"{verify_score_text} | "
+            + f"{row.get('behavior_profile', 'n/a')} | "
             + f"{parallel_text} | "
             + f"{coord_ratio_text} | "
             + f"{duration_text} |"
         )
+
+    behavior_diff_groups: list[tuple[tuple[str, str], list[dict[str, object]]]] = []
+    grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for row in rows:
+        example_id = row.get("example_id")
+        verify_score = row.get("task_verification_score")
+        if not isinstance(example_id, str) or not isinstance(verify_score, (int, float)):
+            continue
+        key = (example_id, f"{float(verify_score):.3f}")
+        grouped.setdefault(key, []).append(row)
+
+    for key, group_rows in grouped.items():
+        if len(group_rows) < 2:
+            continue
+        signatures = {
+            (
+                row.get("run_outcome"),
+                row.get("termination_reason"),
+                tuple(row.get(dim) for dim in judge_dimensions),
+            )
+            for row in group_rows
+        }
+        if len(signatures) > 1:
+            behavior_diff_groups.append((key, group_rows))
+
+    if behavior_diff_groups:
+        lines.extend(["", "## Benchmark-Equal Behavioral Differences", ""])
+        for (example_id, verify_score), group_rows in behavior_diff_groups:
+            lines.append(f"- `{example_id}` at benchmark score `{verify_score}`:")
+            for row in group_rows:
+                profile = _compact_behavior_profile(
+                    {
+                        dim: str(row.get(dim))
+                        for dim in judge_dimensions
+                        if isinstance(row.get(dim), str)
+                    },
+                    judge_dimensions,
+                )
+                lines.append(
+                    "  - "
+                    + f"`{row.get('pattern', 'unknown')}` / `{row.get('experiment_id', '')}` "
+                    + f"→ outcome `{row.get('run_outcome', '')}` "
+                    + f"({row.get('termination_reason', '')}), profile `{profile}`"
+                )
 
     report_text = "\n".join(lines)
     if output:
@@ -781,6 +1153,13 @@ def benchmark_export(
             help="Filter out records below this reward threshold",
         ),
     ] = None,
+    per_agent: Annotated[
+        bool,
+        typer.Option(
+            "--per-agent/--per-experiment",
+            help="Export one record per agent instead of one per experiment",
+        ),
+    ] = False,
 ) -> None:
     """Export benchmark summary runs into training-ready JSONL records."""
     with open(summary) as f:
@@ -827,18 +1206,33 @@ def benchmark_export(
                 skipped += 1
                 continue
 
-            record = build_training_record(run_data, transcript)
-            reward = record.get("reward")
-            if min_reward is not None:
-                if not isinstance(reward, (int, float)) or float(reward) < min_reward:
+            if per_agent:
+                records = build_per_agent_training_records(run_data, transcript)
+                if not records:
                     skipped += 1
                     continue
+                for record in records:
+                    reward = record.get("reward")
+                    if min_reward is not None:
+                        if not isinstance(reward, (int, float)) or float(reward) < min_reward:
+                            continue
+                    out_f.write(json.dumps(record))
+                    out_f.write("\n")
+                    exported += 1
+            else:
+                record = build_training_record(run_data, transcript)
+                reward = record.get("reward")
+                if min_reward is not None:
+                    if not isinstance(reward, (int, float)) or float(reward) < min_reward:
+                        skipped += 1
+                        continue
 
-            out_f.write(json.dumps(record))
-            out_f.write("\n")
-            exported += 1
+                out_f.write(json.dumps(record))
+                out_f.write("\n")
+                exported += 1
 
-    typer.echo(f"Exported records: {exported}")
+    mode_label = "per-agent" if per_agent else "per-experiment"
+    typer.echo(f"Exported records: {exported} ({mode_label})")
     typer.echo(f"Skipped records: {skipped}")
     typer.echo(f"Output JSONL: {out_path}")
 
@@ -962,21 +1356,32 @@ def run(
             help="Action when agent hits turn limit: continue, kill, end (default: interactive prompt)",
         ),
     ] = None,
+    direct_cli: Annotated[
+        bool | None,
+        typer.Option(
+            "--direct-cli/--no-direct-cli",
+            help="Use claude CLI directly instead of SDK daemon (auto-detected for claude harness)",
+        ),
+    ] = None,
 ) -> None:
     """Run an experiment with the given pattern and task."""
     default_sdk, default_experiments = get_default_paths()
     sdk_path = sdk_binary or default_sdk
     exp_dir = experiments_dir or default_experiments
 
-    if not sdk_path.exists():
+    # SDK binary is only required when not using direct CLI mode
+    if direct_cli is not True and not sdk_path.exists():
         typer.echo(f"Error: SDK binary not found at {sdk_path}", err=True)
         typer.echo("Install with: npm install -g sandbox-agent", err=True)
+        typer.echo("Or use --direct-cli to bypass the SDK daemon", err=True)
         raise typer.Exit(1)
 
     turn_limit_handler = _resolve_turn_limit_handler(on_turn_limit)
 
+    backend_label = "direct-cli" if direct_cli else "auto-detect"
     typer.echo(f"Running experiment from: {pattern}")
     typer.echo(f"Task: {task[:100]}{'...' if len(task) > 100 else ''}")
+    typer.echo(f"Backend: {backend_label}")
     if on_turn_limit:
         typer.echo(f"Turn limit action: {on_turn_limit}")
     typer.echo()
@@ -990,6 +1395,7 @@ def run(
                 experiments_dir=exp_dir,
                 on_escalate=notify_escalation,
                 on_turn_limit=turn_limit_handler,
+                use_direct_cli=direct_cli,
             )
         )
 
@@ -1082,7 +1488,11 @@ def validate_config(
         config = ExperimentConfig.from_yaml(pattern)
         typer.echo(f"✓ Valid configuration: {config.name}")
         typer.echo(f"  Agents: {len(config.agents)}")
-        typer.echo(f"  Pattern: {'hub-and-spoke' if config.is_hub_and_spoke() else 'peer-network'}")
+        for agent in config.agents:
+            model_info = f" ({agent.model})" if agent.model else ""
+            role_info = agent.role.value if agent.role else "peer"
+            typer.echo(f"    {agent.id}: {agent.harness}{model_info} [{role_info}]")
+        typer.echo(f"  Pattern: {config.topology_label()}")
         typer.echo(f"  Rules: {len(config.orchestrator.rules)}")
         typer.echo(f"  Dimensions: {', '.join(config.evaluation.dimensions)}")
     except Exception as e:
@@ -1108,24 +1518,83 @@ def list_experiments(
         typer.echo("No experiments found")
         return
 
-    experiments = sorted(exp_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    experiments = _metadata_backed_experiment_dirs(exp_dir)
     if not experiments:
         typer.echo("No experiments found")
         return
 
     typer.echo("Experiments:")
     for exp_path in experiments[:20]:  # Show last 20
-        if not exp_path.is_dir():
-            continue
         metadata_path = exp_path / "metadata.json"
-        if metadata_path.exists():
-            with open(metadata_path) as f:
-                metadata = json.load(f)
-            pattern = metadata.get("pattern", "unknown")
-            created = metadata.get("created_at", "unknown")[:19]
-            typer.echo(f"  {exp_path.name}  [{pattern}]  {created}")
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        pattern = metadata.get("pattern", "unknown")
+        created = metadata.get("created_at", "unknown")[:19]
+        typer.echo(f"  {exp_path.name}  [{pattern}]  {created}")
+
+
+@app.command("backfill-run-metadata")
+def backfill_run_metadata_cmd(
+    experiments_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--experiments-dir",
+            help="Directory containing experiment data",
+        ),
+    ] = None,
+    experiment_id: Annotated[
+        str | None,
+        typer.Option(
+            "--experiment-id",
+            help="Only backfill a single experiment by ID",
+        ),
+    ] = None,
+    refresh_run_data: Annotated[
+        bool,
+        typer.Option(
+            "--refresh-run-data/--no-refresh-run-data",
+            help="Regenerate run_data.json after metadata backfill",
+        ),
+    ] = True,
+) -> None:
+    """Backfill structured run outcome fields into legacy metadata artifacts."""
+    _, default_experiments = get_default_paths()
+    exp_dir = experiments_dir or default_experiments
+
+    if not exp_dir.exists():
+        typer.echo(f"Error: experiments directory not found: {exp_dir}", err=True)
+        raise typer.Exit(1)
+
+    if experiment_id:
+        candidate_dirs = [exp_dir / experiment_id]
+    else:
+        candidate_dirs = _metadata_backed_experiment_dirs(exp_dir)
+
+    updated = 0
+    unchanged = 0
+    refreshed = 0
+
+    for experiment_path in candidate_dirs:
+        metadata_path = experiment_path / "metadata.json"
+        if not metadata_path.exists():
+            typer.echo(f"Error: metadata not found for {experiment_path.name}", err=True)
+            raise typer.Exit(1)
+
+        changed = backfill_metadata_file(metadata_path)
+        if changed:
+            updated += 1
         else:
-            typer.echo(f"  {exp_path.name}")
+            unchanged += 1
+
+        if refresh_run_data:
+            save_run_data(experiment_path)
+            refreshed += 1
+
+    typer.echo(f"Experiments scanned: {len(candidate_dirs)}")
+    typer.echo(f"Metadata updated: {updated}")
+    typer.echo(f"Metadata unchanged: {unchanged}")
+    if refresh_run_data:
+        typer.echo(f"Run data refreshed: {refreshed}")
 
 
 @app.command("judge")
@@ -1316,9 +1785,22 @@ def analyze_experiment(
     # Runtime info
     run_info = metadata.get("run")
     if run_info:
+        if not isinstance(run_info, dict):
+            run_info = {}
+        run_info = merge_normalized_run_record(run_info)
         typer.echo("Run:")
         typer.echo(f"  Success: {run_info.get('success', 'unknown')}")
+        outcome = run_info.get("outcome")
+        termination_reason = run_info.get("termination_reason")
+        if outcome:
+            typer.echo(
+                f"  Outcome: {outcome}"
+                + (f" ({termination_reason})" if termination_reason else "")
+                + (" [system failure]" if run_info.get("system_failure") else "")
+            )
         typer.echo(f"  Duration: {run_info.get('duration_seconds', 0):.1f}s")
+        if run_info.get("message"):
+            typer.echo(f"  Message: {run_info['message']}")
         if run_info.get("error"):
             typer.echo(f"  Error: {run_info['error']}")
         agent_stats = run_info.get("agent_stats", {})
