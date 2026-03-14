@@ -242,8 +242,8 @@ Current reward-validation status:
   - `src/helm/matrix.py` now falls back to summary-level `judge_scores` when `run_data.json` is missing or stale
   - regression covered in `tests/test_matrix.py`
 - Caveat:
-  - the currently running Wave 0 process started before the runner fix was loaded into memory
-  - if it exits under the old code path, repair/backfill the final `matrix.json` after completion before treating it as canonical
+  - resolved: the original Wave 0 process finished with a complete 9-condition `matrix.json`
+  - no repair/backfill was needed
 
 ## 2) What Is Already Done
 

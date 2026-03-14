@@ -38,3 +38,6 @@ data/
 
 # Eval output artifacts
 outputs/
+
+# Generated experiment patterns (derive from matrix manifests; do not treat as source)
+patterns/generated/

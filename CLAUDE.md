@@ -44,6 +44,10 @@ The Helm context system now has four layers:
 The matrix workflow now also has a repo-local skill:
 - `.claude/skills/helm-matrix-generation/SKILL.md`
 
+Generated matrix patterns under `patterns/generated/` are runtime artifacts, not
+source of truth. The source of truth for matrix conditions is the manifest in
+`configs/matrices/`.
+
 ## Key Concepts
 
 ### The Research Loop
@@ -128,9 +132,12 @@ helm/
 │   └── sdk.py            # Python client for Sandbox Agent SDK REST/SSE
 ├── configs/              # Prime RL configs and endpoint aliases
 ├── docs/                 # Documentation
+│   └── archive/          # Historical docs outside the active operating loop
 ├── environments/         # Prime RL training environments
 ├── judges/               # Dimension scoring rubrics
-├── patterns/             # Experiment YAML configs (topologies, benchmarks)
+├── patterns/             # Active experiment YAML configs
+│   ├── archive/          # Historical or out-of-scope patterns
+│   └── generated/        # Generated matrix outputs (runtime artifacts)
 ├── experiments/          # Experiment run data
 ├── scripts/              # Utility scripts (verifiers, data download)
 ├── data/                 # Benchmark datasets (gitignored)
