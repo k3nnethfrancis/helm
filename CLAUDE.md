@@ -23,15 +23,18 @@ This breaks down into:
 
 ## Current Priority
 
-The current priority is **factorized topology expansion before RL**.
+The current priority is **benchmark writeup + Prime RL handoff design**.
 
-Reward validation is far enough along that Helm should now widen controlled evidence across architecture family, swarm size, and task structure instead of adding more ad hoc pattern YAMLs. RL is still downstream.
+Helm now has a basic cross-harness benchmark corpus that is sufficient to stop treating "can we get Claude and Codex onto the same validated slice?" as an open systems question:
+- Claude and Codex both have validated SymPy baselines
+- single / hub-spoke / peer are all represented
+- the benchmark-flat / behavior-different topology story survives across both harnesses
 
 Near-term work should therefore focus on:
-- the matrix substrate (`configs/matrices/`, `src/helm/matrix.py`, generator/runner/analyzer scripts)
-- Wave 0 / Wave 1 SWE-bench matrix slices
-- benchmark-flat but behavior-different comparisons across more than one task family
-- using the active behavioral dimensions as first-class outputs in every comparison, not only post hoc notes
+- turning the current research-log corpus into a short technical writeup
+- defining the first Prime RL pilot handoff around the validated benchmark corpus
+- using `closure-first` as the primary reward family and `balanced` as the comparison family
+- keeping the factorized matrix as the next widening path after the first RL transition is clearly specified
 
 Use Claude Code as the main execution path unless there is a specific reason to widen to Codex or another harness.
 

@@ -3,7 +3,7 @@
 **Research question**: Are Helm's current behavioral dimensions robust enough to join benchmark performance as training signals for orchestrators and swarms?
 
 **Status**: Active
-**Updated**: 2026-03-13
+**Updated**: 2026-03-14
 
 ---
 
@@ -39,6 +39,16 @@ The near-term program should use Claude Code as the primary execution and judgin
 - it lets us validate the reward ontology without spending the budget on cross-model breadth too early
 
 Codex and other harnesses should remain secondary spot checks until the reward battery is stable on Claude-first conditions.
+
+Current milestone state:
+- the Claude-first reward-validation battery is complete enough to support a first reward recommendation
+- the basic cross-harness topology baseline is now also complete on the validated SymPy pair:
+  - Claude and Codex each have single / hub-spoke / peer coverage on the same tasks
+  - the benchmark-flat / behavior-different result survives across both harnesses
+- immediate next work should therefore emphasize:
+  - short writeup synthesis
+  - first Prime RL pilot handoff design
+  - matrix widening after that handoff is specified cleanly
 
 ---
 

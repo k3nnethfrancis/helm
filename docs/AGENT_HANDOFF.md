@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Last updated: 2026-03-13
+Last updated: 2026-03-14
 
 This file is the continuation guide for a new agent session picking up Helm work.
 
@@ -21,17 +21,22 @@ Coordination design principle: runtime exposes channels and logs their use; expe
 
 ## 1a) Current Priority
 
-The immediate milestone is now **factorized topology expansion before RL**.
+The immediate milestone is now **basic benchmark writeup + Prime RL handoff design**.
 
-Reward validation is far enough along that Helm should stop adding ad hoc pattern variants and instead widen controlled evidence across:
-- architecture family
-- swarm size
-- task structure
+Helm now has enough benchmark evidence to stop treating "get a basic cross-harness corpus" as an open question:
+- Claude and Codex both have validated SymPy baselines
+- single / hub-spoke / peer are all represented
+- the benchmark-flat / behavior-different story is now visible across two harnesses
 
-RL is still downstream. The current job is to use the validated benchmark + behavioral measurement path inside a manifest-driven matrix rather than a pile of bespoke YAMLs.
+That means the next sequence is:
+- turn the current research-log corpus into a short technical writeup
+- define the first Prime RL handoff around the validated corpus and reward recommendation
+- keep the factorized matrix as the next widening path after the first RL transition is scoped cleanly
 
-Primary planning reference:
+Primary planning references:
 - `docs/rq1-experiment-plan.md`
+- `notes/shoshin-codex/projects/helm/helm-cross-harness-topology-baseline-2026-03-14.md`
+- `notes/shoshin-codex/projects/helm/helm-reward-validation-note-2026-03-13.md`
 
 Operational workflow aid:
 - workspace skill `helm-experiment-loop` for run → review → improve execution discipline
@@ -206,6 +211,36 @@ Current reward-validation status:
     - same benchmark score does **not** mean equivalent system behavior
     - single remains cleaner on `failure-suppression`, `context-degradation`, and `resource-waste`
     - swarm topologies accumulate closure failure and waste even on solved tasks
+
+### 2026-03-14 - Basic Claude/Codex Topology Baseline Closed
+
+- Added and ran the missing Codex peer pattern on the validated SymPy pair:
+  - `patterns/benchmark-swebench-peer-gpt5-sympy-pair.yaml`
+  - summary: `experiments/benchmark-runs/benchmark-swebench-peer-gpt5-sympy-pair-20260314-100635.json`
+- New exports:
+  - `experiments/benchmark-runs/benchmark-swebench-peer-gpt5-sympy-pair-20260314-100635.train.jsonl`
+  - `experiments/benchmark-runs/benchmark-swebench-peer-gpt5-sympy-pair-20260314-100635.train.orchestration.jsonl`
+- Generated the six-summary compare artifact:
+  - `experiments/analyses/sympy-cross-harness-topology-compare-20260314.md`
+- Current cross-harness SymPy read:
+  - all 12 runs verify at `1.0`
+  - single:
+    - Claude `2/2` completed
+    - Codex `2/2` completed
+  - hub-spoke:
+    - Claude `1/2` incomplete
+    - Codex `1/2` incomplete
+  - peer:
+    - Claude `2/2` incomplete
+    - Codex `2/2` incomplete
+- New Codex peer read:
+  - `sympy__sympy-17630`: verifier-pass workaround + reviewer rejection + `incomplete (turn_limit)`
+  - `sympy__sympy-21930`: verifier-pass patch + unresolved local review/test mismatch + `incomplete (turn_limit)`
+- Important caveat:
+  - older Codex single / hub summaries predate default inline benchmark judging, so the six-summary compare report shows `n/a` for some summary-level behavior cells
+  - use `experiments/analyses/e6-cross-harness-codex-sympy-pair-20260313/summary.json` for the fuller Codex single / hub behavioral read
+- Writeup-ready note now exists:
+  - `notes/shoshin-codex/projects/helm/helm-cross-harness-topology-baseline-2026-03-14.md`
 - important planning update:
   - do not think of the next stage as "more than three YAMLs"
   - think of it as a factorized architecture matrix
