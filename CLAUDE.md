@@ -141,7 +141,6 @@ These dimensions are first evaluation instruments. Some may later become trainin
 helm/
 ├── CLAUDE.md             # You are here
 ├── README.md             # Public-facing overview
-├── plan.md               # Research plan with RQs and milestones
 ├── pyproject.toml        # Package config (hatchling build)
 ├── src/helm/             # Source package
 │   ├── __init__.py
