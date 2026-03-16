@@ -837,6 +837,10 @@ def build_run_data(experiment_dir: Path) -> dict[str, Any]:
             "schema_version": scores_schema,
             "backend": scores.get("judge_backend"),
             "model": scores.get("judge_model"),
+            "strategy": scores.get("strategy"),
+            "input_view_type": scores.get("input_view_type"),
+            "input_preparation": scores.get("input_preparation"),
+            "artifacts": scores.get("artifacts"),
             "scores": score_map,
             "raw": scores,
         }

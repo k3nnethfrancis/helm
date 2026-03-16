@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import json
 
-from helm.collector import render_transcript_markdown, summarize_coordination_messages
+from helm.collector import (
+    TRANSCRIPT_COORDINATION_PREVIEW_CHARS,
+    build_communication_view,
+    render_agent_view_markdown,
+    render_communication_view_markdown,
+    render_transcript_markdown,
+    summarize_coordination_messages,
+)
 from helm.judge import load_transcript
 
 
@@ -94,6 +101,10 @@ def test_summarize_coordination_messages_separates_artifacts_from_nudges() -> No
 def test_render_transcript_markdown_clarifies_nudge_semantics() -> None:
     rendered = render_transcript_markdown(_sample_transcript())
 
+    assert "## Transcript Summary" in rendered
+    assert "**Agents**: 2 | **Total Items**: 2 | **Coordination Messages**: 1" in rendered
+    assert "- `researcher`: 1 items" in rendered
+    assert "- `implementer`: 1 items" in rendered
     assert "**Observed Artifacts**: 1" in rendered
     assert "**Live Nudges Attempted**: 1" in rendered
     assert "**Live Nudges Delivered**: 0" in rendered
@@ -103,6 +114,57 @@ def test_render_transcript_markdown_clarifies_nudge_semantics() -> None:
     assert "Channel: `persistent_peer_messages, filesystem, persistent, mixed`" in rendered
     assert "Content Preview:" in rendered
     assert "Please apply the fix." in rendered
+
+
+def test_render_transcript_markdown_uses_wider_coordination_preview() -> None:
+    transcript = _sample_transcript()
+    long_content = "A" * (TRANSCRIPT_COORDINATION_PREVIEW_CHARS + 250)
+    transcript["coordination_messages"][0]["content"] = long_content
+
+    rendered = render_transcript_markdown(transcript)
+
+    expected_preview = "A" * TRANSCRIPT_COORDINATION_PREVIEW_CHARS + "..."
+    assert expected_preview in rendered
+
+
+def test_build_communication_view_preserves_delivery_and_uptake_fields() -> None:
+    view = build_communication_view(_sample_transcript())
+
+    assert view["view_type"] == "coordination-only"
+    assert view["coordination_summary"]["observed_messages"] == 1
+    assert len(view["messages"]) == 1
+    message = view["messages"][0]
+    assert message["delivery_status"] == "failed"
+    assert message["recipient_activity"]["active_targets"] == ["implementer"]
+
+
+def test_render_agent_view_markdown_includes_agent_summary() -> None:
+    transcript = _sample_transcript()
+    agent_view = transcript.copy()
+    agent_view["agent_id"] = "implementer"
+    agent_view["agent_summary"] = {
+        "item_count": 1,
+        "tool_calls": 0,
+        "tool_errors": 0,
+        "sent_coordination_messages": 0,
+        "received_coordination_messages": 1,
+        "broadcast_coordination_messages": 0,
+    }
+    agent_view["agents"] = {"implementer": transcript["agents"]["implementer"]}
+    rendered = render_agent_view_markdown(agent_view)
+
+    assert "# Per-Agent View" in rendered
+    assert "Agent: `implementer`" in rendered
+    assert "- Coordination received: `1`" in rendered
+
+
+def test_render_communication_view_markdown_includes_message_timeline() -> None:
+    rendered = render_communication_view_markdown(build_communication_view(_sample_transcript()))
+
+    assert "# Coordination View" in rendered
+    assert "## Message Timeline" in rendered
+    assert "Delivery status: `failed`" in rendered
+    assert "Active recipients after message: `['implementer']`" in rendered
 
 
 def test_load_transcript_prefers_json_rendering(tmp_path) -> None:
@@ -193,5 +255,7 @@ def test_load_transcript_truncates_large_judge_prompt(tmp_path) -> None:
     rendered, task = load_transcript(experiment_dir)
 
     assert task == "large task"
-    assert "[... judge transcript truncated for budget:" in rendered
+    assert "## Long-Run Digest" in rendered
+    assert "[... detailed event log truncated for budget:" in rendered
+    assert "## Detailed Event Log Excerpts" in rendered
     assert len(rendered) < 120_000

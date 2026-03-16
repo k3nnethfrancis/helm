@@ -140,6 +140,7 @@ def _judge_benchmark_experiment(
             backend=judge_backend,
             backend_name=backend_name,
             model_name=model_name,
+            strategy="hierarchical",
         )
     )
 
@@ -1617,6 +1618,13 @@ def judge_experiment_cmd(
             help="Judge backend: 'sdk' (free) or 'openrouter'",
         ),
     ] = "sdk",
+    strategy: Annotated[
+        str,
+        typer.Option(
+            "--strategy",
+            help="Judge strategy: 'hierarchical' (default) or 'single' legacy mode",
+        ),
+    ] = "hierarchical",
     model: Annotated[
         str | None,
         typer.Option(
@@ -1692,6 +1700,7 @@ def judge_experiment_cmd(
 
     typer.echo(f"Judging experiment: {experiment_id}")
     typer.echo(f"Backend: {backend}" + (f" ({model or 'google/gemini-2.0-flash-001'})" if backend == "openrouter" else " (Claude Code headless)"))
+    typer.echo(f"Strategy: {strategy}")
     typer.echo(f"Dimensions: {', '.join(dimension_list)}")
     typer.echo()
 
@@ -1704,6 +1713,7 @@ def judge_experiment_cmd(
                 backend=judge_backend,
                 backend_name=backend,
                 model_name=model if backend == "openrouter" else None,
+                strategy=strategy,
             )
         )
 
@@ -1857,6 +1867,8 @@ def analyze_experiment(
         typer.echo(f"  Backend: {scores.get('judge_backend', 'unknown')}")
         if scores.get("judge_model"):
             typer.echo(f"  Model: {scores['judge_model']}")
+        if scores.get("strategy"):
+            typer.echo(f"  Strategy: {scores['strategy']}")
         schema_version = scores.get("schema_version", "v1")
         for s in scores.get("scores", []):
             if "category" in s:

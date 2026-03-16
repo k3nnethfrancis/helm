@@ -23,18 +23,38 @@ This breaks down into:
 
 ## Current Priority
 
-The current priority is **benchmark writeup + Prime RL handoff design**.
+The current priority is **post-hardening baseline expansion before RL**.
 
-Helm now has a basic cross-harness benchmark corpus that is sufficient to stop treating "can we get Claude and Codex onto the same validated slice?" as an open systems question:
+Helm now has enough benchmark and reward-validation evidence to stop treating "can we run a basic cross-harness SWE-bench corpus?" as the main open question:
 - Claude and Codex both have validated SymPy baselines
 - single / hub-spoke / peer are all represented
 - the benchmark-flat / behavior-different topology story survives across both harnesses
+- `closure-first` currently looks like the right first reward family, with `balanced` as the comparison arm
 
-Near-term work should therefore focus on:
-- turning the current research-log corpus into a short technical writeup
-- defining the first Prime RL pilot handoff around the validated benchmark corpus
-- using `closure-first` as the primary reward family and `balanced` as the comparison family
-- keeping the factorized matrix as the next widening path after the first RL transition is clearly specified
+That means the next sequence should be:
+- use the internal technical report and judge-hardening note as the current summary anchors
+- treat the hierarchical judge as validated enough for the next baseline phase
+- run broader `3 / 5 / 8` benchmark baselines, with SWE-bench as the default substrate and Terminal-Bench as an optional small follow-up sample if cost and verifier readiness are acceptable
+- move to the first Prime RL pilot only after the judge path is trustworthy enough for larger-scale benchmark comparisons
+
+Judge hardening should focus on:
+- whether the judge sees the right context from multi-agent transcripts and coordination artifacts
+- whether long transcript handling preserves the evidence needed to understand swarm behavior
+- whether verifier context, closure state, and benchmark warnings are surfaced consistently
+- whether the judging path is repeatable and auditable enough for future training use
+- whether Inspect- or Petri-style structured auditing / reproducibility patterns would improve Helm's judge stack
+
+Current judge direction:
+- the multi-view hierarchical judge is now implemented as the mainline path in `helm judge`
+- legacy single-pass judging still exists as explicit audit mode via `--strategy single`
+- the deterministic long-run digest remains an internal preparation mechanism where needed, not the product direction
+- the immediate next experimental step is the post-hardening matrix pilot:
+  - `wave1_size3_pilot` in `configs/matrices/swebench_architecture_phase1.yaml`
+  - single@1 plus all non-single families at size 3 across one decomposable and one sequential SWE-bench example
+  - matrix defaults now use `openrouter` for judging to keep the broader baseline phase tractable
+
+Primary planning reference for this phase:
+- `docs/judge-hardening-plan.md`
 
 Use Claude Code as the main execution path unless there is a specific reason to widen to Codex or another harness.
 
@@ -42,7 +62,7 @@ The Helm context system now has four layers:
 - `tasks.md` for priorities
 - `progress-ledger.md` for implementation progress and project-state changes
 - `research-log.md` for writeup-friendly experiment notes
-- project docs / handoff files for durable operating context
+- project docs for durable operating context
 
 The matrix workflow now also has a repo-local skill:
 - `.claude/skills/helm-matrix-generation/SKILL.md`
@@ -133,16 +153,15 @@ helm/
 │   ├── runtime_guard.py  # Rule-based intervention engine
 │   ├── run_data.py       # Run-data contract + orchestration evals
 │   └── sdk.py            # Python client for Sandbox Agent SDK REST/SSE
-├── configs/              # Prime RL configs and endpoint aliases
-├── docs/                 # Documentation
-│   └── archive/          # Historical docs outside the active operating loop
+├── configs/              # Matrix manifests and RL-related configs
+├── docs/                 # Small active doc set
+│   └── README.md         # Doc map and restart order
 ├── environments/         # Prime RL training environments
 ├── judges/               # Dimension scoring rubrics
-├── patterns/             # Active experiment YAML configs
-│   ├── archive/          # Historical or out-of-scope patterns
+├── patterns/             # Hand-authored experiment YAML configs
 │   └── generated/        # Generated matrix outputs (runtime artifacts)
 ├── experiments/          # Experiment run data
-├── scripts/              # Utility scripts (verifiers, data download)
+├── scripts/              # Matrix, judge, and benchmark support scripts
 ├── data/                 # Benchmark datasets (gitignored)
 └── bin/                  # SDK binary
 ```
@@ -237,10 +256,6 @@ The swarm rollout is the canonical artifact, but per-agent projections are still
 
 **Read and update `~/Desktop/lab/notes/shoshin-codex/projects/helm/research-log.md` after meaningful experiment blocks.** Use it to record experiment questions, conditions, artifacts, concrete results, interpretations, confounds, next steps, and short writeup hooks. This is the layer intended to make later technical reporting easy without replaying every raw transcript.
 
-## Theory Log
-
-**`docs/theory.md`** documents the theoretical reasoning that underpins Helm's systems design — the *why* behind architectural decisions. Update it during research discussions that produce theoretical insights, design rationale, or connections to foundational literature. This is the reasoning companion to the progress ledger's implementation log.
-
 ## Harness Engineering Context
 
 The harness (interface between model and workspace) is a critical confound in agent evaluation:
@@ -249,4 +264,4 @@ The harness (interface between model and workspace) is a critical confound in ag
 - **Mechanical enforcement > prompt steering** — enforce structure via linters/CI, not just system prompts
 - **Harness-model interaction** — no single format dominates across models. Multi-harness experiments surface this.
 
-This means our `docs/harness-control-assessment.md` is critical before running baselines — we need to know what the harness controls vs what's "agent skill."
+Treat harness behavior as a standing confound in baseline interpretation. When a result shifts materially, inspect whether the change came from orchestration policy, model capability, or harness mechanics before treating it as a behavioral conclusion.

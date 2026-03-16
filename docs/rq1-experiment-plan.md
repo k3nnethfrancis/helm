@@ -46,9 +46,41 @@ Current milestone state:
   - Claude and Codex each have single / hub-spoke / peer coverage on the same tasks
   - the benchmark-flat / behavior-different result survives across both harnesses
 - immediate next work should therefore emphasize:
-  - short writeup synthesis
-  - first Prime RL pilot handoff design
-  - matrix widening after that handoff is specified cleanly
+  - short internal writeup synthesis
+  - judge hardening before larger baselines or RL
+  - a second internal note/report on judge hardening outcomes
+  - only then broader `3 / 5 / 8` baseline expansion and RL handoff design
+
+---
+
+## Judge Hardening Gate
+
+Before RL or broader matrix widening, Helm needs a focused judge-hardening pass. The current dimensions and reward recommendation are useful, but the judge path is still a research instrument under construction.
+
+The gate questions are:
+- Does the judge receive the right context from multi-agent transcripts, tool outputs, and coordination artifacts?
+- Does transcript rendering preserve enough information to understand what actually happened in the swarm?
+- Does long-context handling keep the most important evidence, or are we silently dropping the parts that matter?
+- Are benchmark verifier outcomes, closure state, and warnings surfaced consistently enough for the judge to reason over them?
+- Is the judging process repeatable and auditable enough for future training use?
+- Would Inspect- or Petri-style structured auditability and seeded reproducibility improve the current path?
+
+Current implementation state:
+- the multi-view hierarchical judge is now implemented and is the default `helm judge` path
+- legacy merged-transcript judging remains available only as explicit audit mode via `--strategy single`
+- the remaining gate work is comparison and audit:
+  - hierarchical vs legacy single
+  - both against manual review on the saved long-run panel
+
+The near-term deliverables are:
+1. an internal technical report on the current benchmark + reward-validation corpus
+2. a judge-hardening audit and implementation pass
+3. an internal technical report on judge hardening findings, fixes, and residual risks
+4. broader `3 / 5 / 8` benchmark baselines, defaulting to SWE-bench and using Terminal-Bench only as a small optional probe if cost and verifier readiness justify it
+5. only after that, the first Prime RL pilot design
+
+The detailed work plan for this gate lives in:
+- `/Users/kenneth/Desktop/lab/projects/helm/docs/judge-hardening-plan.md`
 
 ---
 

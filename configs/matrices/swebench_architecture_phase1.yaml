@@ -14,7 +14,7 @@ defaults:
     - failure-suppression
     - context-degradation
     - resource-waste
-  judge_backend: sdk
+  judge_backend: openrouter
   benchmark:
     adapter: swebench
     id: princeton-nlp/SWE-bench_Verified
@@ -91,6 +91,23 @@ waves:
     notes: >-
       Smoke the matrix substrate with a known-stable SymPy anchor. Run single@1 and
       all non-single families at 2 and 3.
+
+  wave1_size3_pilot:
+    families:
+      - single
+      - independent
+      - centralized
+      - decentralized
+      - hybrid
+    sizes: [1, 3]
+    pack_examples:
+      decomposable_cross_module: 1
+      sequential_local: 1
+    notes: >-
+      Post-hardening pilot over one example from each task pack, using single@1
+      plus all non-single families at size 3. This is the first broader family
+      comparison after judge hardening, before spending the budget on the full
+      wave1 matrix.
 
   wave1:
     families:

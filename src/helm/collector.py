@@ -15,6 +15,10 @@ from typing import Any
 from helm.coordination.base import CoordinationMessage
 from helm.sdk import SDKEvent
 
+TRANSCRIPT_TEXT_PREVIEW_CHARS = 2000
+TRANSCRIPT_TOOL_RESULT_PREVIEW_CHARS = 1000
+TRANSCRIPT_COORDINATION_PREVIEW_CHARS = 1500
+
 
 @dataclass
 class TranscriptItem:
@@ -365,8 +369,182 @@ def _sorted_transcript_items(transcript: dict[str, Any]) -> list[dict[str, Any]]
     return items
 
 
+def _count_agent_tools(items: list[dict[str, Any]]) -> tuple[int, int]:
+    tool_calls = 0
+    tool_errors = 0
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("event_type") != "item.completed":
+            continue
+        data = item.get("data", {})
+        if not isinstance(data, dict):
+            continue
+        item_data = data.get("item", {})
+        if not isinstance(item_data, dict):
+            continue
+        content = item_data.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "tool_call":
+                tool_calls += 1
+            elif part.get("type") == "tool_result" and part.get("is_error"):
+                tool_errors += 1
+
+    return tool_calls, tool_errors
+
+
+def build_communication_view(transcript: dict[str, Any]) -> dict[str, Any]:
+    """Build a coordination-only judge view from a multi-agent transcript."""
+    coordination_messages = transcript.get("coordination_messages", [])
+    if not isinstance(coordination_messages, list):
+        coordination_messages = []
+
+    agents = transcript.get("agents", {})
+    summary = summarize_coordination_messages(coordination_messages, agents=agents)
+    agent_activity_by_agent, agent_ids = _build_agent_activity_index(agents)
+
+    rendered_messages: list[dict[str, Any]] = []
+    for raw_message in coordination_messages:
+        if not isinstance(raw_message, (dict, CoordinationMessage)):
+            continue
+        message = _coordination_message_to_dict(raw_message)
+        ts = _parse_iso_timestamp(message.get("timestamp"))
+        targets = _resolve_message_targets(message, agent_ids=agent_ids)
+        active_targets: list[str] = []
+        inactive_targets: list[str] = []
+        if ts is not None:
+            for target in targets:
+                if any(event_ts > ts for event_ts in agent_activity_by_agent.get(target, [])):
+                    active_targets.append(target)
+                else:
+                    inactive_targets.append(target)
+
+        rendered_messages.append(
+            {
+                "timestamp": message.get("timestamp"),
+                "sender": message.get("sender"),
+                "recipient": message.get("recipient"),
+                "message_type": message.get("message_type"),
+                "content": message.get("content"),
+                "source_path": message.get("source_path"),
+                "channel_id": message.get("channel_id"),
+                "channel_medium": message.get("channel_medium"),
+                "channel_persistence": message.get("channel_persistence"),
+                "channel_scope": message.get("channel_scope"),
+                "observed_via": message.get("observed_via"),
+                "delivery_status": _message_delivery_status(message),
+                "targets": targets,
+                "recipient_activity": {
+                    "active_targets": active_targets,
+                    "inactive_targets": inactive_targets,
+                    "had_any_post_message_activity": bool(active_targets) if targets else None,
+                },
+            }
+        )
+
+    return {
+        "view_type": "coordination-only",
+        "experiment_id": transcript.get("experiment_id"),
+        "experiment_name": transcript.get("experiment_name"),
+        "start_time": transcript.get("start_time"),
+        "end_time": transcript.get("end_time"),
+        "coordination_summary": summary,
+        "messages": rendered_messages,
+    }
+
+
+def render_communication_view_markdown(view: dict[str, Any]) -> str:
+    """Render a coordination-only judge view as readable markdown."""
+    lines = [
+        "# Coordination View",
+        f"Experiment: `{view.get('experiment_id')}`",
+        "",
+    ]
+
+    summary = view.get("coordination_summary", {})
+    if isinstance(summary, dict):
+        recipient_activity_rate = summary.get("recipient_activity_rate")
+        if isinstance(recipient_activity_rate, (int, float)):
+            recipient_activity_label = f"{recipient_activity_rate:.0%}"
+        else:
+            recipient_activity_label = "n/a"
+        lines.extend(
+            [
+                "## Coordination Summary",
+                "",
+                f"- Observed messages: `{summary.get('observed_messages', 0)}`",
+                f"- File-backed messages: `{summary.get('file_backed_messages', 0)}`",
+                f"- Live nudges attempted: `{summary.get('nudge_attempts', 0)}`",
+                f"- Live nudges delivered: `{summary.get('delivered', 0)}`",
+                f"- Recipient activity rate: `{recipient_activity_label}`",
+                "",
+            ]
+        )
+
+    lines.extend(["## Message Timeline", ""])
+    for message in view.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        timestamp = str(message.get("timestamp", ""))
+        ts = timestamp[11:19] if len(timestamp) >= 19 else timestamp or "unknown"
+        lines.append(
+            f"- `[{ts}]` `{message.get('sender') or '?'} -> {message.get('recipient') or '?'}` "
+            f"`{message.get('message_type') or 'unknown'}`"
+        )
+        channel_bits = [
+            bit
+            for bit in [
+                message.get("channel_id"),
+                message.get("channel_medium"),
+                message.get("channel_persistence"),
+                message.get("channel_scope"),
+            ]
+            if isinstance(bit, str) and bit
+        ]
+        if channel_bits:
+            lines.append(f"  - Channel: `{', '.join(channel_bits)}`")
+        if message.get("source_path"):
+            lines.append(f"  - Artifact: `{message['source_path']}`")
+        if message.get("observed_via"):
+            lines.append(f"  - Observed via: `{message['observed_via']}`")
+        lines.append(f"  - Delivery status: `{message.get('delivery_status') or 'unknown'}`")
+        recipient_activity = message.get("recipient_activity", {})
+        if isinstance(recipient_activity, dict):
+            active_targets = recipient_activity.get("active_targets", [])
+            inactive_targets = recipient_activity.get("inactive_targets", [])
+            if active_targets:
+                lines.append(f"  - Active recipients after message: `{active_targets}`")
+            if inactive_targets:
+                lines.append(f"  - Inactive recipients after message: `{inactive_targets}`")
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            preview = content.strip()
+            if len(preview) > TRANSCRIPT_COORDINATION_PREVIEW_CHARS:
+                preview = preview[:TRANSCRIPT_COORDINATION_PREVIEW_CHARS] + "..."
+            lines.append("  - Content:")
+            lines.append("```")
+            lines.append(preview)
+            lines.append("```")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
 def render_transcript_markdown(transcript: dict[str, Any]) -> str:
     """Render a transcript dict as readable markdown."""
+    coordination_messages = transcript.get("coordination_messages", [])
+    coordination_summary = None
+    if coordination_messages:
+        coordination_summary = summarize_coordination_messages(
+            coordination_messages,
+            agents=transcript.get("agents", {}),
+        )
+
     lines = [
         f"# Experiment: {transcript.get('experiment_name')}",
         f"ID: `{transcript.get('experiment_id')}`",
@@ -377,6 +555,51 @@ def render_transcript_markdown(transcript: dict[str, Any]) -> str:
         "---",
         "",
     ]
+
+    agents = transcript.get("agents", {})
+    if isinstance(agents, dict) and agents:
+        total_items = transcript.get("total_items")
+        if not isinstance(total_items, int):
+            total_items = 0
+            for agent_data in agents.values():
+                if not isinstance(agent_data, dict):
+                    continue
+                item_count = agent_data.get("item_count")
+                if isinstance(item_count, int):
+                    total_items += item_count
+                    continue
+                raw_items = agent_data.get("items", [])
+                if isinstance(raw_items, list):
+                    total_items += len(raw_items)
+        lines.append("## Transcript Summary")
+        lines.append("")
+        lines.append(
+            f"**Agents**: {len(agents)} | "
+            f"**Total Items**: {total_items} | "
+            f"**Coordination Messages**: {len(coordination_messages)}"
+        )
+        for agent_id, agent_data in agents.items():
+            if not isinstance(agent_data, dict):
+                continue
+            item_count = agent_data.get("item_count")
+            if not isinstance(item_count, int):
+                raw_items = agent_data.get("items", [])
+                item_count = len(raw_items) if isinstance(raw_items, list) else 0
+            lines.append(f"- `{agent_id}`: {item_count} items")
+        if coordination_summary is not None:
+            recipient_activity_rate = "n/a"
+            if coordination_summary["recipient_activity_rate"] is not None:
+                recipient_activity_rate = f"{coordination_summary['recipient_activity_rate']:.0%}"
+            lines.append(
+                f"**Coordination Snapshot**: observed={coordination_summary['observed_messages']}, "
+                f"file_backed={coordination_summary['file_backed_messages']}, "
+                f"nudges_attempted={coordination_summary['nudge_attempts']}, "
+                f"nudges_delivered={coordination_summary['delivered']}, "
+                f"recipient_activity={recipient_activity_rate}"
+            )
+        lines.append("")
+        lines.append("---")
+        lines.append("")
 
     for item in _sorted_transcript_items(transcript):
         event_type = item.get("event_type")
@@ -411,8 +634,8 @@ def render_transcript_markdown(transcript: dict[str, Any]) -> str:
                     continue
                 if part.get("type") == "text":
                     full_text = str(part.get("text", ""))
-                    text = full_text[:2000]
-                    if len(full_text) > 2000:
+                    text = full_text[:TRANSCRIPT_TEXT_PREVIEW_CHARS]
+                    if len(full_text) > TRANSCRIPT_TEXT_PREVIEW_CHARS:
                         text += "..."
                     lines.append(f"\n```\n{text}\n```")
                 elif part.get("type") == "tool_call":
@@ -436,8 +659,8 @@ def render_transcript_markdown(transcript: dict[str, Any]) -> str:
                     output = part.get("output", part.get("text", ""))
                     is_error = part.get("is_error", False)
                     if output:
-                        output_str = str(output)[:1000]
-                        if len(str(output)) > 1000:
+                        output_str = str(output)[:TRANSCRIPT_TOOL_RESULT_PREVIEW_CHARS]
+                        if len(str(output)) > TRANSCRIPT_TOOL_RESULT_PREVIEW_CHARS:
                             output_str += "..."
                         label = "**Error Output**" if is_error else "**Output**"
                         lines.append(f"{label}:")
@@ -464,12 +687,11 @@ def render_transcript_markdown(transcript: dict[str, Any]) -> str:
         lines.append("")
         lines.append("---")
         lines.append("")
-
-    coord_msgs = transcript.get("coordination_messages", [])
+    coord_msgs = coordination_messages
     if coord_msgs:
         lines.append("## Coordination Messages")
         lines.append("")
-        summary = summarize_coordination_messages(
+        summary = coordination_summary or summarize_coordination_messages(
             coord_msgs,
             agents=transcript.get("agents", {}),
         )
@@ -511,8 +733,8 @@ def render_transcript_markdown(transcript: dict[str, Any]) -> str:
             content = message.get("content")
             if isinstance(content, str) and content.strip():
                 preview = content.strip()
-                if len(preview) > 600:
-                    preview = preview[:600] + "..."
+                if len(preview) > TRANSCRIPT_COORDINATION_PREVIEW_CHARS:
+                    preview = preview[:TRANSCRIPT_COORDINATION_PREVIEW_CHARS] + "..."
                 lines.append("  - Content Preview:")
                 lines.append("```")
                 lines.append(preview)
@@ -567,23 +789,70 @@ def extract_agent_transcript(
     if not isinstance(agent_data, dict):
         return None
 
+    coordination_messages = [
+        msg for msg in transcript.get("coordination_messages", [])
+        if isinstance(msg, dict) and (
+            msg.get("sender") == agent_id
+            or msg.get("recipient") == agent_id
+            or msg.get("recipient") == "__all__"
+        )
+    ]
+    items = agent_data.get("items", [])
+    if not isinstance(items, list):
+        items = []
+    tool_calls, tool_errors = _count_agent_tools(items)
+    direct_messages = sum(1 for msg in coordination_messages if msg.get("recipient") == agent_id)
+    sent_messages = sum(1 for msg in coordination_messages if msg.get("sender") == agent_id)
+    broadcast_messages = sum(1 for msg in coordination_messages if msg.get("recipient") == "__all__")
+
     return {
+        "view_type": "per-agent",
         "experiment_id": transcript.get("experiment_id"),
         "experiment_name": transcript.get("experiment_name"),
         "start_time": agent_data.get("start_time"),
         "end_time": agent_data.get("end_time"),
         "agent_id": agent_id,
+        "agent_summary": {
+            "item_count": agent_data.get("item_count", len(items)),
+            "tool_calls": tool_calls,
+            "tool_errors": tool_errors,
+            "sent_coordination_messages": sent_messages,
+            "received_coordination_messages": direct_messages,
+            "broadcast_coordination_messages": broadcast_messages,
+        },
         "agents": {agent_id: agent_data},
-        "total_items": agent_data.get("item_count", len(agent_data.get("items", []))),
-        "coordination_messages": [
-            msg for msg in transcript.get("coordination_messages", [])
-            if isinstance(msg, dict) and (
-                msg.get("sender") == agent_id
-                or msg.get("recipient") == agent_id
-                or msg.get("recipient") == "__all__"
-            )
-        ],
+        "total_items": agent_data.get("item_count", len(items)),
+        "coordination_messages": coordination_messages,
     }
+
+
+def render_agent_view_markdown(agent_view: dict[str, Any]) -> str:
+    """Render a per-agent judge view with a local summary header."""
+    agent_id = agent_view.get("agent_id") or "unknown"
+    summary = agent_view.get("agent_summary", {})
+    lines = [
+        "# Per-Agent View",
+        f"Agent: `{agent_id}`",
+        "",
+    ]
+
+    if isinstance(summary, dict):
+        lines.extend(
+            [
+                "## Agent Summary",
+                "",
+                f"- Items: `{summary.get('item_count', 0)}`",
+                f"- Tool calls: `{summary.get('tool_calls', 0)}`",
+                f"- Tool errors: `{summary.get('tool_errors', 0)}`",
+                f"- Coordination sent: `{summary.get('sent_coordination_messages', 0)}`",
+                f"- Coordination received: `{summary.get('received_coordination_messages', 0)}`",
+                f"- Broadcast coordination seen: `{summary.get('broadcast_coordination_messages', 0)}`",
+                "",
+            ]
+        )
+
+    lines.append(render_transcript_markdown(agent_view))
+    return "\n".join(lines).strip()
 
 
 class EventCollector:

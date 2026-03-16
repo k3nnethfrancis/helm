@@ -293,6 +293,8 @@ def test_extract_agent_transcript_preserves_experiment_context() -> None:
     assert result is not None
     assert result["experiment_id"] == "exp-multi-1"
     assert result["experiment_name"] == "hub-spoke-test"
+    assert result["agent_summary"]["sent_coordination_messages"] == 2
+    assert result["agent_summary"]["broadcast_coordination_messages"] == 2
 
 
 # ---------------------------------------------------------------------------

@@ -36,21 +36,21 @@ The canonical artifact in Helm is not a model answer. It is a **swarm rollout**:
 
 ## Near-Term Program
 
-The next phase of Helm is **reward validation before RL**.
+The current phase is **post-hardening baseline expansion before RL**.
 
-The intended training target is benchmark performance plus behavioral dimensions, not benchmark score alone. But Helm should not optimize on those dimensions until they clear a few empirical gates:
-- repeated judging on the same rollout is stable enough to trust
-- the dimensions actually separate orchestration conditions
-- the dimensions add signal when benchmark score is flat or ambiguous
-- the resulting reward does not rank obviously pathological runs too highly
+Helm has already completed the first reward-validation and judge-hardening pass:
+- the hierarchical judge is now the default path
+- cross-harness topology baselines exist for Claude and Codex
+- the benchmark-flat / behavior-different result is established on the validated SymPy slice
+- `closure-first` is the current leading reward family, with `balanced` as the comparison arm
 
-In practice this means a Claude-first experiment program:
-- validate the five active judged dimensions on saved Claude rollouts
-- run Claude single vs. swarm slices on coordination-relevant SWE-bench tasks
-- audit missing signals like closure and verification discipline
-- test reward mixtures offline before coupling them into training
+That means the next job is to widen controlled benchmark evidence before any Prime RL handoff:
+- run broader `3 / 5 / 8` swarm baselines on SWE-bench
+- keep behavioral dimensions first-class in every comparison
+- use the matrix substrate rather than ad hoc YAML proliferation
+- only return to RL once the broader baseline corpus is strong enough
 
-See [docs/rq1-experiment-plan.md](/Users/kenneth/Desktop/lab/projects/helm/docs/rq1-experiment-plan.md) for the active reward-validation battery.
+See [docs/rq1-experiment-plan.md](/Users/kenneth/Desktop/lab/projects/helm/docs/rq1-experiment-plan.md) for the active experiment program and [docs/judge-hardening-plan.md](/Users/kenneth/Desktop/lab/projects/helm/docs/judge-hardening-plan.md) for the current judge architecture.
 
 ## What Helm Does
 
@@ -213,6 +213,21 @@ helm benchmark export experiments/benchmark-runs/<summary>.json
 helm readiness --summary experiments/benchmark-runs/<summary>.json
 ```
 
+## Repo Map
+
+Use these as the active context stack:
+
+- [CLAUDE.md](/Users/kenneth/Desktop/lab/projects/helm/CLAUDE.md)
+  Project identity, current priority, and working expectations.
+- [docs/README.md](/Users/kenneth/Desktop/lab/projects/helm/docs/README.md)
+  Active repo docs and what each one is for.
+- `/Users/kenneth/Desktop/lab/notes/shoshin-codex/tasks.md`
+  Workspace-level priorities.
+- `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/progress-ledger.md`
+  Running implementation/project ledger.
+- `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/research-log.md`
+  Writeup-friendly experiment record.
+
 ### Define Your Own Experiment
 
 Experiments are YAML configs that specify agents, coordination topology, orchestrator rules, and evaluation dimensions.
@@ -300,23 +315,15 @@ The `experiments/hub-spoke-parallel-build-c2e0a21d/` directory contains a comple
 
 ```
 helm/
-├── src/helm/              # Source package
-│   ├── cli.py             # Typer CLI
-│   ├── experiment.py      # Experiment lifecycle
-│   ├── runtime_guard.py   # Rule-based runtime guard
-│   ├── collector.py       # Event aggregation + trace generation
-│   ├── judge.py           # Dual-backend scoring
-│   ├── run_data.py        # Run-data contract + orchestration evals
-│   ├── sdk.py             # Sandbox Agent SDK client
-│   ├── config.py          # Pydantic models
-│   └── coordination/      # Pluggable coordination backends
-├── patterns/              # Experiment YAML configs
-├── judges/                # Dimension scoring rubrics
-├── environments/          # Prime RL training environments
-├── configs/               # Prime RL configs, endpoint aliases
-├── experiments/           # Experiment run data
-├── docs/                  # Architecture, dimensions, runbooks
-├── scripts/               # Verifiers, data download
+├── src/helm/              # Runtime, benchmark, judge, export, CLI code
+├── tests/                 # Regression coverage for the active stack
+├── patterns/              # Hand-authored experiment patterns
+├── judges/                # Behavioral dimension rubrics
+├── configs/               # Matrix manifests and RL-related configs
+├── environments/          # Downstream Prime RL environments
+├── docs/                  # Small active doc set
+├── scripts/               # Matrix/judge/benchmark support scripts
+├── experiments/           # Run artifacts (not source)
 └── data/                  # Benchmark datasets (gitignored)
 ```
 

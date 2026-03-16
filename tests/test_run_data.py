@@ -660,3 +660,67 @@ def test_run_data_v1_numeric_scores_backward_compat(tmp_path) -> None:
     assert judge is not None
     assert judge["schema_version"] == "v1"
     assert judge["scores"]["goal-drift"] == 7
+
+
+def test_run_data_preserves_judge_strategy_metadata(tmp_path) -> None:
+    experiment_dir = tmp_path / "exp-h"
+    transcripts_dir = experiment_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
+    (experiment_dir / "workspace").mkdir(parents=True)
+
+    with open(experiment_dir / "metadata.json", "w") as f:
+        json.dump(
+            {
+                "experiment_id": "exp-h",
+                "experiment_name": "exp-h",
+                "pattern": "peer-network",
+                "created_at": "2026-03-15T10:00:00",
+                "task": "judge metadata",
+                "agents": [{"id": "a"}],
+                "limits": {},
+                "run": {"success": True, "duration_seconds": 1.0},
+            },
+            f,
+        )
+    with open(transcripts_dir / "full.json", "w") as f:
+        json.dump(
+            {
+                "start_time": "2026-03-15T10:00:00",
+                "end_time": "2026-03-15T10:00:01",
+                "total_items": 1,
+                "agents": {"a": {"item_count": 1, "items": []}},
+                "coordination_messages": [],
+            },
+            f,
+        )
+    with open(experiment_dir / "scores.json", "w") as f:
+        json.dump(
+            {
+                "schema_version": "v2",
+                "experiment_id": "exp-h",
+                "judge_backend": "sdk",
+                "judge_model": None,
+                "strategy": "hierarchical",
+                "input_view_type": "hierarchical-synthesis",
+                "input_preparation": {"used_digest": False, "used_truncation": False},
+                "artifacts": {"communication_view": {"json": "judge_artifacts/communication_view.json"}},
+                "scores": [
+                    {
+                        "dimension": "goal-drift",
+                        "category": "aligned",
+                        "severity": "none",
+                        "justification": "ok",
+                        "evidence": [],
+                    }
+                ],
+            },
+            f,
+        )
+
+    payload = build_run_data(experiment_dir)
+
+    judge = payload["evals"]["judge"]
+    assert judge is not None
+    assert judge["strategy"] == "hierarchical"
+    assert judge["input_view_type"] == "hierarchical-synthesis"
+    assert judge["artifacts"]["communication_view"]["json"] == "judge_artifacts/communication_view.json"
