@@ -231,6 +231,39 @@ Document and, if needed, improve:
 Output:
 - a repeatable audit protocol for future judge changes
 
+Status:
+- initial observability/reproducibility pass completed on 2026-03-20
+- helper:
+  - `scripts/audit_judge_reproducibility.py`
+- key artifact:
+  - `experiments/analyses/j3-judge-reproducibility-audit-20260320/summary.json`
+  - `experiments/analyses/j3-judge-reproducibility-audit-20260320/report.md`
+
+Implementation result:
+- judge outputs now persist:
+  - rubric fingerprints (`path` + `sha256`) per scored dimension
+  - exact prepared judge-input artifacts:
+    - `judge_artifacts/single_input.md`
+    - `judge_artifacts/communication_input.md`
+    - `judge_artifacts/per_agent_inputs/*.md`
+    - `judge_artifacts/synthesis_inputs/*.md`
+  - audit metadata describing:
+    - deterministic preprocessing
+    - backend/model provenance
+    - artifact hashes for replay comparison
+- `run_data.json` now carries the new judge audit block through `evals.judge.audit`
+- `helm judge --backend openrouter` now records the actual default model name instead of leaving it null
+
+Current read:
+- pre-J3 pilot artifacts were already inspectable, but they were still missing rubric fingerprints and exact prepared judge inputs
+- after rejudging a completed pilot run with the new code, the audit passes cleanly on:
+  - metadata completeness
+  - rubric fingerprints
+  - artifact resolution
+  - exact input persistence
+- this is enough to treat the current hierarchical judge path as auditable enough for the next baseline phase
+- what remains nondeterministic is the model-backed scoring step itself, not the evidence-preparation layer
+
 ### J4. Rubric Boundary Pass
 
 Revisit the known ambiguous categories with targeted examples and sharpen the rubric language only after the input/context path is verified.

@@ -152,6 +152,7 @@ def test_judge_experiment_hierarchical_writes_layered_artifacts(tmp_path: Path) 
     assert scores.strategy == "hierarchical"
     assert scores.input_view_type == "hierarchical-synthesis"
     assert scores.artifacts is not None
+    assert scores.audit is not None
     assert len(backend.calls) == 4
     assert "# Coordination View" in backend.calls[0]
     assert "# Per-Agent View" in backend.calls[1]
@@ -160,10 +161,14 @@ def test_judge_experiment_hierarchical_writes_layered_artifacts(tmp_path: Path) 
 
     artifacts_dir = experiment_dir / "judge_artifacts"
     assert (artifacts_dir / "communication_view.json").exists()
+    assert (artifacts_dir / "communication_input.md").exists()
     assert (artifacts_dir / "communication_scores.json").exists()
     assert (artifacts_dir / "per_agent_views" / "researcher.json").exists()
+    assert (artifacts_dir / "per_agent_inputs" / "researcher.md").exists()
     assert (artifacts_dir / "per_agent_scores" / "implementer.json").exists()
+    assert (artifacts_dir / "synthesis_inputs" / "goal-drift.md").exists()
     assert (artifacts_dir / "synthesis_scores.json").exists()
+    assert scores.audit["rubrics"]["goal-drift"]["sha256"]
 
 
 def test_judge_experiment_single_keeps_legacy_path(tmp_path: Path) -> None:
@@ -188,3 +193,6 @@ def test_judge_experiment_single_keeps_legacy_path(tmp_path: Path) -> None:
     assert scores.strategy == "single"
     assert len(backend.calls) == 1
     assert "# Experiment: hierarchical-smoke" in backend.calls[0]
+    assert scores.artifacts is not None
+    assert scores.audit is not None
+    assert (experiment_dir / "judge_artifacts" / "single_input.md").exists()

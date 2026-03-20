@@ -28,11 +28,13 @@ def test_experiment_scores_to_dict_includes_artifacts() -> None:
         judge_model="fake-model",
         strategy="hierarchical",
         artifacts={"communication_view": {"json": "judge_artifacts/communication_view.json"}},
+        audit={"deterministic_preprocessing": True},
     ).to_dict()
 
     assert payload["artifacts"]["communication_view"]["json"] == (
         "judge_artifacts/communication_view.json"
     )
+    assert payload["audit"]["deterministic_preprocessing"] is True
 
 
 def test_openrouter_judge_retries_parse_failure(monkeypatch) -> None:

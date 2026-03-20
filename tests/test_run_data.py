@@ -704,6 +704,16 @@ def test_run_data_preserves_judge_strategy_metadata(tmp_path) -> None:
                 "input_view_type": "hierarchical-synthesis",
                 "input_preparation": {"used_digest": False, "used_truncation": False},
                 "artifacts": {"communication_view": {"json": "judge_artifacts/communication_view.json"}},
+                "audit": {
+                    "deterministic_preprocessing": True,
+                    "nondeterministic_backend": True,
+                    "rubrics": {
+                        "goal-drift": {
+                            "path": "/tmp/judges/goal-drift.md",
+                            "sha256": "abc123",
+                        }
+                    },
+                },
                 "scores": [
                     {
                         "dimension": "goal-drift",
@@ -724,3 +734,4 @@ def test_run_data_preserves_judge_strategy_metadata(tmp_path) -> None:
     assert judge["strategy"] == "hierarchical"
     assert judge["input_view_type"] == "hierarchical-synthesis"
     assert judge["artifacts"]["communication_view"]["json"] == "judge_artifacts/communication_view.json"
+    assert judge["audit"]["rubrics"]["goal-drift"]["sha256"] == "abc123"

@@ -14,6 +14,7 @@ Schema versions:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from collections import Counter
@@ -127,6 +128,7 @@ class ExperimentScores:
     input_view_type: str = "merged-transcript"
     input_preparation: dict[str, bool] = field(default_factory=dict)
     artifacts: dict[str, Any] | None = None
+    audit: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         scores_list = []
@@ -155,6 +157,8 @@ class ExperimentScores:
         }
         if self.artifacts:
             payload["artifacts"] = self.artifacts
+        if self.audit:
+            payload["audit"] = self.audit
         return payload
 
     def save(self, path: Path) -> None:
@@ -479,6 +483,15 @@ def load_rubric(dimension: str, judges_dir: Path) -> str:
     if not rubric_path.exists():
         raise FileNotFoundError(f"Rubric not found: {rubric_path}")
     return rubric_path.read_text()
+
+
+def _load_rubric_record(dimension: str, judges_dir: Path) -> tuple[str, dict[str, str]]:
+    rubric_path = judges_dir / f"{dimension}.md"
+    rubric = load_rubric(dimension, judges_dir)
+    return rubric, {
+        "path": str(rubric_path),
+        "sha256": hashlib.sha256(rubric.encode("utf-8")).hexdigest(),
+    }
 
 
 def _load_experiment_context(
@@ -921,6 +934,33 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text)
 
 
+def _hash_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _build_judge_audit_record(
+    *,
+    strategy: str,
+    backend_name: str,
+    model_name: str | None,
+    rubrics: dict[str, dict[str, str]],
+    artifact_paths: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "deterministic_preprocessing": True,
+        "nondeterministic_backend": backend_name in {"openrouter", "sdk"},
+        "backend_variability_notes": [
+            "Judge evidence preparation and artifact generation are deterministic.",
+            "Final category selection may vary across reruns because the judge backend is model-driven.",
+        ],
+        "strategy": strategy,
+        "backend": backend_name,
+        "model": model_name,
+        "rubrics": rubrics,
+        "artifact_hashes": artifact_paths or {},
+    }
+
+
 def _render_score_bundle(title: str, scores: list[DimensionScore]) -> str:
     lines = [f"# {title}", ""]
     for score in scores:
@@ -1009,12 +1049,24 @@ async def _judge_experiment_single(
         verifier_context=verifier_context,
     )
 
+    artifacts_dir = experiment_dir / "judge_artifacts"
+    single_input_path = artifacts_dir / "single_input.md"
+    _write_text(single_input_path, transcript)
+
     scores = []
+    rubric_records: dict[str, dict[str, str]] = {}
     for dimension in dimensions:
-        rubric = load_rubric(dimension, judges_dir)
+        rubric, rubric_record = _load_rubric_record(dimension, judges_dir)
+        rubric_records[dimension] = rubric_record
         score = await backend.score(transcript, task, rubric)
         scores.append(score)
 
+    artifact_refs = {
+        "single_input": str(single_input_path.relative_to(experiment_dir)),
+    }
+    artifact_hashes = {
+        "single_input": _hash_file(single_input_path),
+    }
     return ExperimentScores(
         experiment_id=experiment_dir.name,
         scores=scores,
@@ -1023,6 +1075,14 @@ async def _judge_experiment_single(
         strategy="single",
         input_view_type="merged-transcript",
         input_preparation=preparation,
+        artifacts=artifact_refs,
+        audit=_build_judge_audit_record(
+            strategy="single",
+            backend_name=backend_name,
+            model_name=model_name,
+            rubrics=rubric_records,
+            artifact_paths=artifact_hashes,
+        ),
     )
 
 
@@ -1057,6 +1117,7 @@ async def _judge_experiment_hierarchical(
     artifacts_dir = experiment_dir / "judge_artifacts"
     communication_view_json_path = artifacts_dir / "communication_view.json"
     communication_view_md_path = artifacts_dir / "communication_view.md"
+    communication_input_path = artifacts_dir / "communication_input.md"
     run_context_path = artifacts_dir / "run_context.md"
     _write_json(communication_view_json_path, communication_view)
     _write_text(communication_view_md_path, communication_markdown)
@@ -1084,21 +1145,29 @@ async def _judge_experiment_hierarchical(
     communication_input, comm_preparation = _prepare_text_evidence_for_judge(
         communication_markdown,
     )
+    _write_text(communication_input_path, communication_input)
     used_digest = used_digest or comm_preparation["used_digest"]
     used_truncation = used_truncation or comm_preparation["used_truncation"]
 
     prepared_agent_inputs: dict[str, str] = {}
+    prepared_agent_input_paths: dict[str, Path] = {}
     for agent_id, agent_markdown in per_agent_markdowns.items():
         prepared_agent_input, prep = _prepare_text_evidence_for_judge(
             agent_markdown,
             transcript_json=per_agent_views[agent_id],
         )
         prepared_agent_inputs[agent_id] = prepared_agent_input
+        agent_input_path = artifacts_dir / "per_agent_inputs" / f"{agent_id}.md"
+        _write_text(agent_input_path, prepared_agent_input)
+        prepared_agent_input_paths[agent_id] = agent_input_path
         used_digest = used_digest or prep["used_digest"]
         used_truncation = used_truncation or prep["used_truncation"]
 
+    rubric_records: dict[str, dict[str, str]] = {}
+    synthesis_input_paths: dict[str, Path] = {}
     for dimension in dimensions:
-        rubric = load_rubric(dimension, judges_dir)
+        rubric, rubric_record = _load_rubric_record(dimension, judges_dir)
+        rubric_records[dimension] = rubric_record
         communication_score = await backend.score(communication_input, task, rubric)
         communication_scores.append(communication_score)
 
@@ -1116,6 +1185,9 @@ async def _judge_experiment_hierarchical(
                 per_agent_scores=per_agent_dimension_scores,
             )
         )
+        synthesis_input_path = artifacts_dir / "synthesis_inputs" / f"{dimension}.md"
+        _write_text(synthesis_input_path, synthesis_input)
+        synthesis_input_paths[dimension] = synthesis_input_path
         used_digest = used_digest or synthesis_preparation["used_digest"]
         used_truncation = used_truncation or synthesis_preparation["used_truncation"]
         synthesis_score = await backend.score(synthesis_input, task, rubric)
@@ -1177,11 +1249,53 @@ async def _judge_experiment_hierarchical(
                 "json": str(communication_view_json_path.relative_to(experiment_dir)),
                 "markdown": str(communication_view_md_path.relative_to(experiment_dir)),
             },
+            "communication_input": str(communication_input_path.relative_to(experiment_dir)),
             "per_agent_views": per_agent_artifact_refs,
+            "per_agent_inputs": {
+                agent_id: str(path.relative_to(experiment_dir))
+                for agent_id, path in prepared_agent_input_paths.items()
+            },
             "communication_scores": str(communication_scores_path.relative_to(experiment_dir)),
             "per_agent_scores": per_agent_score_refs,
             "synthesis_scores": str(synthesis_scores_path.relative_to(experiment_dir)),
+            "synthesis_inputs": {
+                dimension: str(path.relative_to(experiment_dir))
+                for dimension, path in synthesis_input_paths.items()
+            },
         },
+        audit=_build_judge_audit_record(
+            strategy="hierarchical",
+            backend_name=backend_name,
+            model_name=model_name,
+            artifact_paths={
+                "run_context": _hash_file(run_context_path),
+                "communication_view_json": _hash_file(communication_view_json_path),
+                "communication_view_markdown": _hash_file(communication_view_md_path),
+                "communication_input": _hash_file(communication_input_path),
+                "per_agent_views": {
+                    agent_id: {
+                        "json": _hash_file(experiment_dir / refs["json"]),
+                        "markdown": _hash_file(experiment_dir / refs["markdown"]),
+                    }
+                    for agent_id, refs in per_agent_artifact_refs.items()
+                },
+                "per_agent_inputs": {
+                    agent_id: _hash_file(path)
+                    for agent_id, path in prepared_agent_input_paths.items()
+                },
+                "communication_scores": _hash_file(communication_scores_path),
+                "per_agent_scores": {
+                    agent_id: _hash_file(experiment_dir / relative_path)
+                    for agent_id, relative_path in per_agent_score_refs.items()
+                },
+                "synthesis_inputs": {
+                    dimension: _hash_file(path)
+                    for dimension, path in synthesis_input_paths.items()
+                },
+                "synthesis_scores": _hash_file(synthesis_scores_path),
+            },
+            rubrics=rubric_records,
+        ),
     )
 
 

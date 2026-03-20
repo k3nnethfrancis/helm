@@ -1071,7 +1071,7 @@ def judge_experiment_cmd(
                 judges_dir=judges_dir,
                 backend=judge_backend,
                 backend_name=backend,
-                model_name=model if backend == "openrouter" else None,
+                model_name=judge_model if backend == "openrouter" else None,
                 strategy=strategy,
             )
         )
