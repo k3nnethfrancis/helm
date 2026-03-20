@@ -14,7 +14,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 
@@ -29,11 +29,30 @@ from helm.benchmarks import (
     verify_benchmark_run,
     write_task_verification,
 )
+from helm.cli_benchmark import (
+    MATRIX_FIELD_NAMES,
+    compact_behavior_profile as _compact_behavior_profile,
+    effective_benchmark_dimensions as _effective_benchmark_dimensions,
+    flatten_matrix_fields as _flatten_matrix_fields,
+    judge_benchmark_experiment as _judge_benchmark_experiment,
+    load_dimension_categories as _load_dimension_categories,
+    matrix_payload as _matrix_payload,
+    merge_dimensions as _merge_dimensions,
+)
+from helm.cli_shared import (
+    ACTIVE_BEHAVIORAL_DIMENSIONS,
+    DEFAULT_JUDGE_DIMENSIONS,
+    DIMENSION_SHORT_LABELS,
+    get_default_paths,
+    metadata_backed_experiment_dirs,
+    notify_escalation,
+    print_run_result,
+    resolve_turn_limit_handler,
+)
 from helm.config import ExperimentConfig
 from helm.experiment import run_experiment, run_experiment_with_config
 from helm.run_data import save_run_data
 from helm.run_outcomes import backfill_metadata_file, merge_normalized_run_record
-from helm.sdk import SDKEvent
 
 app = typer.Typer(
     name="helm",
@@ -42,172 +61,6 @@ app = typer.Typer(
 )
 benchmark_app = typer.Typer(help="Benchmark adapter utilities")
 app.add_typer(benchmark_app, name="benchmark")
-
-ACTIVE_BEHAVIORAL_DIMENSIONS = [
-    "escalation-calibration",
-    "goal-drift",
-    "failure-suppression",
-    "context-degradation",
-    "resource-waste",
-]
-
-DEFAULT_JUDGE_DIMENSIONS = ACTIVE_BEHAVIORAL_DIMENSIONS.copy()
-
-DIMENSION_SHORT_LABELS = {
-    "escalation-calibration": "EC",
-    "goal-drift": "GD",
-    "failure-suppression": "FS",
-    "context-degradation": "CD",
-    "resource-waste": "RW",
-}
-
-MATRIX_FIELD_NAMES = [
-    "matrix_id",
-    "condition_id",
-    "architecture_family",
-    "swarm_size",
-    "task_pack",
-    "task_structure",
-    "prompt_family",
-    "coordination_family",
-]
-
-
-def _merge_dimensions(
-    configured: list[str] | None,
-    baseline: list[str],
-) -> list[str]:
-    ordered: list[str] = []
-    seen: set[str] = set()
-
-    for dim in baseline:
-        clean = dim.strip()
-        if not clean or clean in seen:
-            continue
-        ordered.append(clean)
-        seen.add(clean)
-
-    for dim in configured or []:
-        clean = str(dim).strip()
-        if not clean or clean in seen:
-            continue
-        ordered.append(clean)
-        seen.add(clean)
-
-    return ordered
-
-
-def _effective_benchmark_dimensions(config: ExperimentConfig) -> list[str]:
-    return _merge_dimensions(config.evaluation.dimensions, ACTIVE_BEHAVIORAL_DIMENSIONS)
-
-
-def _build_judge_backend_from_config(judge_config) -> tuple[object, str, str | None]:
-    from helm.judge import OpenRouterJudge, SDKJudge
-
-    backend_name = (
-        judge_config.backend.value
-        if hasattr(judge_config.backend, "value")
-        else str(judge_config.backend)
-    )
-    if backend_name == "openrouter":
-        judge_model = judge_config.model or "google/gemini-2.0-flash-001"
-        return OpenRouterJudge(model=judge_model), backend_name, judge_model
-    return SDKJudge(), "sdk", None
-
-
-def _judge_benchmark_experiment(
-    experiment_dir: Path,
-    config: ExperimentConfig,
-    dimensions: list[str],
-) -> tuple[Path, dict[str, dict[str, str]]]:
-    from helm.judge import judge_experiment
-
-    helm_dir = Path(__file__).parent.parent.parent
-    judges_dir = helm_dir / "judges"
-    if not judges_dir.exists():
-        judges_dir = Path.cwd() / "judges"
-    if not judges_dir.exists():
-        raise FileNotFoundError("judges/ directory not found")
-
-    judge_backend, backend_name, model_name = _build_judge_backend_from_config(
-        config.evaluation.judge
-    )
-    scores = asyncio.run(
-        judge_experiment(
-            experiment_dir=experiment_dir,
-            dimensions=dimensions,
-            judges_dir=judges_dir,
-            backend=judge_backend,
-            backend_name=backend_name,
-            model_name=model_name,
-            strategy="hierarchical",
-        )
-    )
-
-    scores_path = experiment_dir / "scores.json"
-    scores.save(scores_path)
-    save_run_data(experiment_dir)
-
-    score_summary = {
-        score.dimension: {
-            "category": score.category,
-            "severity": score.severity,
-        }
-        for score in scores.scores
-    }
-    return scores_path, score_summary
-
-
-def _load_dimension_categories(
-    run_data: dict[str, Any],
-    fallback_scores: dict[str, Any] | None = None,
-) -> dict[str, str]:
-    judge = run_data.get("evals", {}).get("judge", {})
-    scores = judge.get("scores", {}) if isinstance(judge, dict) else {}
-    categories: dict[str, str] = {}
-
-    if isinstance(scores, dict):
-        for dim, payload in scores.items():
-            if not isinstance(payload, dict):
-                continue
-            category = payload.get("category")
-            if isinstance(category, str) and category.strip():
-                categories[dim] = category.strip()
-
-    if categories or not isinstance(fallback_scores, dict):
-        return categories
-
-    for dim, payload in fallback_scores.items():
-        if not isinstance(payload, dict):
-            continue
-        category = payload.get("category")
-        if isinstance(category, str) and category.strip():
-            categories[dim] = category.strip()
-    return categories
-
-
-def _compact_behavior_profile(
-    categories: dict[str, str],
-    dimensions: list[str],
-) -> str:
-    parts: list[str] = []
-    for dim in dimensions:
-        category = categories.get(dim)
-        if not category:
-            continue
-        label = DIMENSION_SHORT_LABELS.get(dim, dim)
-        parts.append(f"{label}={category}")
-    return ", ".join(parts) if parts else "n/a"
-
-
-def _matrix_payload(config: ExperimentConfig) -> dict[str, Any] | None:
-    return config.matrix_metadata()
-
-
-def _flatten_matrix_fields(matrix: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(matrix, dict):
-        return {field: None for field in MATRIX_FIELD_NAMES}
-    return {field: matrix.get(field) for field in MATRIX_FIELD_NAMES}
 
 
 def _prime_config_field_not_set(output: str, field_name: str) -> bool:
@@ -232,136 +85,6 @@ def _prime_config_field_not_set(output: str, field_name: str) -> bool:
 
     return False
 
-
-def prompt_turn_limit(agent_id: str, turns: int, limit: int) -> tuple[str, int | None]:
-    """Interactive prompt when an agent hits its turn limit."""
-    typer.echo(f"\n⚠ Agent '{agent_id}' reached turn limit ({turns}/{limit}).")
-    typer.echo("  [C]ontinue indefinitely  [+N] Add N turns  [K]ill agent  [E]nd experiment")
-    while True:
-        try:
-            choice = input("  > ").strip().lower()
-        except EOFError:
-            typer.echo("  (non-interactive mode, ending experiment)")
-            return ("end_experiment", None)
-        if choice == "c":
-            return ("continue", None)
-        elif choice.startswith("+") and choice[1:].isdigit():
-            return ("extend", int(choice[1:]))
-        elif choice == "k":
-            return ("kill_agent", None)
-        elif choice == "e":
-            return ("end_experiment", None)
-        else:
-            typer.echo("  Invalid. Enter C, +N (e.g. +20), K, or E")
-
-
-def static_turn_limit(action: str) -> callable:
-    """Return a non-interactive turn-limit handler for the given action."""
-    def handler(agent_id: str, turns: int, limit: int) -> tuple[str, int | None]:
-        typer.echo(f"\n⚠ Agent '{agent_id}' reached turn limit ({turns}/{limit}) → {action}")
-        return (action, None)
-    return handler
-
-
-def _resolve_turn_limit_handler(on_turn_limit: str | None) -> callable:
-    """Resolve configured or interactive turn limit behavior."""
-    valid_actions = {"continue", "kill", "end", "kill_agent", "end_experiment"}
-    if on_turn_limit is not None:
-        action = on_turn_limit.strip().lower()
-        # Normalize short forms
-        if action == "kill":
-            action = "kill_agent"
-        elif action == "end":
-            action = "end_experiment"
-        if action not in valid_actions:
-            typer.echo(
-                "Error: --on-turn-limit must be one of: continue, kill, end",
-                err=True,
-            )
-            raise typer.Exit(1)
-        return static_turn_limit(action)
-    return prompt_turn_limit
-
-
-def _print_run_result(result) -> None:
-    """Print a consistent summary for a finished run result."""
-    if result.outcome == "completed":
-        typer.echo(f"✓ Experiment completed: {result.experiment_id}")
-    elif result.outcome == "paused":
-        typer.echo(
-            f"⚠ Experiment paused: {result.message or result.termination_reason}"
-        )
-    elif result.outcome == "incomplete":
-        typer.echo(
-            f"⚠ Experiment ended incomplete: {result.message or result.termination_reason}"
-        )
-    else:
-        typer.echo(f"✗ Experiment failed: {result.error or result.message}")
-
-    typer.echo(
-        f"  Outcome: {result.outcome} ({result.termination_reason})"
-        + (" [system failure]" if result.system_failure else "")
-    )
-
-    typer.echo(f"  Duration: {(result.end_time - result.start_time).total_seconds():.1f}s")
-
-    if result.agent_stats:
-        typer.echo("  Agent stats:")
-        for agent_id, stats in result.agent_stats.items():
-            typer.echo(f"    {agent_id}: {stats['turns']} turns")
-
-    if result.transcript_path and result.transcript_path.exists():
-        typer.echo(f"  Transcript: {result.transcript_path}")
-
-
-def notify_escalation(agent_id: str, event: SDKEvent, rule: object) -> None:
-    """Notify user when a run escalates to human intervention."""
-    reason = getattr(rule, "reason", None)
-    if not reason:
-        reason = event.data.get("prompt") or event.data.get("action") or event.type
-    typer.echo(
-        f"\n⚠ Escalation requested by '{agent_id}': {reason}",
-        err=True,
-    )
-
-
-def get_default_paths() -> tuple[Path, Path]:
-    """Get default paths for SDK binary and experiments directory."""
-    # helm_dir is projects/helm/ - go up from src/helm/cli.py
-    # __file__ = src/helm/cli.py -> parent = src/helm -> parent = src -> parent = helm/
-    helm_dir = Path(__file__).parent.parent.parent
-    sdk_binary = helm_dir / "bin" / "sandbox-agent"
-
-    if not sdk_binary.exists():
-        # Try current working directory
-        cwd_binary = Path.cwd() / "bin" / "sandbox-agent"
-        if cwd_binary.exists():
-            sdk_binary = cwd_binary
-        else:
-            # Try npm global
-            import shutil
-            npm_binary = shutil.which("sandbox-agent")
-            if npm_binary:
-                sdk_binary = Path(npm_binary)
-
-    experiments_dir = helm_dir / "experiments"
-    if not experiments_dir.exists():
-        experiments_dir = Path.cwd() / "experiments"
-
-    return sdk_binary, experiments_dir
-
-
-def _metadata_backed_experiment_dirs(experiments_dir: Path) -> list[Path]:
-    """Return experiment directories that contain canonical metadata."""
-    return sorted(
-        (
-            path
-            for path in experiments_dir.iterdir()
-            if path.is_dir() and (path / "metadata.json").exists()
-        ),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
 
 
 @app.command("readiness")
@@ -636,7 +359,7 @@ def run_benchmark_examples(
         return
 
     plan = build_benchmark_run_plan(config, examples)
-    turn_limit_handler = _resolve_turn_limit_handler(on_turn_limit)
+    turn_limit_handler = resolve_turn_limit_handler(on_turn_limit)
 
     typer.echo(f"Running benchmark sample from: {pattern}")
     typer.echo(f"Adapter: {adapter.name}")
@@ -676,7 +399,7 @@ def run_benchmark_examples(
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(1)
 
-        _print_run_result(result)
+        print_run_result(result)
 
         run_dir = exp_dir / result.experiment_id
         verification_status = None
@@ -1377,7 +1100,7 @@ def run(
         typer.echo("Or use --direct-cli to bypass the SDK daemon", err=True)
         raise typer.Exit(1)
 
-    turn_limit_handler = _resolve_turn_limit_handler(on_turn_limit)
+    turn_limit_handler = resolve_turn_limit_handler(on_turn_limit)
 
     backend_label = "direct-cli" if direct_cli else "auto-detect"
     typer.echo(f"Running experiment from: {pattern}")
@@ -1400,7 +1123,7 @@ def run(
             )
         )
 
-        _print_run_result(result)
+        print_run_result(result)
 
     except KeyboardInterrupt:
         typer.echo("\nExperiment interrupted")
@@ -1519,7 +1242,7 @@ def list_experiments(
         typer.echo("No experiments found")
         return
 
-    experiments = _metadata_backed_experiment_dirs(exp_dir)
+    experiments = metadata_backed_experiment_dirs(exp_dir)
     if not experiments:
         typer.echo("No experiments found")
         return
@@ -1569,7 +1292,7 @@ def backfill_run_metadata_cmd(
     if experiment_id:
         candidate_dirs = [exp_dir / experiment_id]
     else:
-        candidate_dirs = _metadata_backed_experiment_dirs(exp_dir)
+        candidate_dirs = metadata_backed_experiment_dirs(exp_dir)
 
     updated = 0
     unchanged = 0
