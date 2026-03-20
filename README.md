@@ -319,8 +319,7 @@ helm/
 ├── tests/                 # Regression coverage for the active stack
 ├── patterns/              # Hand-authored experiment patterns
 ├── judges/                # Behavioral dimension rubrics
-├── configs/               # Matrix manifests and RL-related configs
-├── environments/          # Downstream Prime RL environments
+├── configs/               # Matrix manifests
 ├── docs/                  # Small active doc set
 ├── scripts/               # Matrix/judge/benchmark support scripts
 ├── experiments/           # Run artifacts (not source)

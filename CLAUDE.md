@@ -129,9 +129,9 @@ These dimensions are first evaluation instruments. Some may later become trainin
                     │
                     ▼
 ┌─────────────────────────────────────────┐
-│ Prime RL / Optimization                 │
-│ - Optional downstream training          │
-│ - Uses validated signals from Helm      │
+│ Downstream RL / Optimization            │
+│ - Optional later training               │
+│ - Uses validated signals exported by Helm │
 └─────────────────────────────────────────┘
 ```
 
@@ -152,10 +152,9 @@ helm/
 │   ├── runtime_guard.py  # Rule-based intervention engine
 │   ├── run_data.py       # Run-data contract + orchestration evals
 │   └── sdk.py            # Python client for Sandbox Agent SDK REST/SSE
-├── configs/              # Matrix manifests and RL-related configs
+├── configs/              # Matrix manifests
 ├── docs/                 # Small active doc set
 │   └── README.md         # Doc map and restart order
-├── environments/         # Prime RL training environments
 ├── judges/               # Dimension scoring rubrics
 ├── patterns/             # Hand-authored experiment YAML configs
 │   └── generated/        # Generated matrix outputs (runtime artifacts)
@@ -242,7 +241,7 @@ We do not yet have a complete definition of "better orchestration." Key question
 - When does a strong single agent beat a swarm with fewer failure modes?
 
 ### Multi-Turn Optimization
-Current Prime RL environments are single-turn (model generates text, gets scored). Training on full multi-turn agent traces requires multi-turn RL infrastructure. This is a known gap between current capability and any optimization goal.
+Helm no longer keeps active Prime environment packages or RL configs in-repo. When the project returns to Prime RL, that substrate should be regenerated from the validated benchmark/export corpus rather than treated as current source of truth.
 
 ### Trace Format
 The swarm rollout is the canonical artifact, but per-agent projections are still useful for analysis and training. Implemented: `build_per_agent_training_records()` extracts one record per agent with trace slices, shared reward, and agent metadata. Reward attribution is shared (same composite for all agents) — credit assignment deferred.
