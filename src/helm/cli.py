@@ -61,6 +61,13 @@ benchmark_app = typer.Typer(help="Benchmark adapter utilities")
 app.add_typer(benchmark_app, name="benchmark")
 
 
+def _format_exception_message(error: Exception) -> str:
+    message = str(error).strip()
+    if message:
+        return message
+    return repr(error)
+
+
 def _prime_config_field_not_set(output: str, field_name: str) -> bool:
     """Return True if `prime config view` reports a field as Not set."""
     for raw_line in output.splitlines():
@@ -457,8 +464,8 @@ def run_benchmark_examples(
                 )
                 typer.echo(f"  Judge artifact: {judge_scores_path}")
             except Exception as e:
-                judge_error = str(e)
-                typer.echo(f"  Warning: behavioral judging failed: {e}")
+                judge_error = _format_exception_message(e)
+                typer.echo(f"  Warning: behavioral judging failed: {judge_error}")
 
         typer.echo()
 

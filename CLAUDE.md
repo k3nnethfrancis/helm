@@ -52,6 +52,11 @@ Current judge direction:
   - `wave1_size3_pilot` in `configs/matrices/swebench_architecture_phase1.yaml`
   - single@1 plus all non-single families at size 3 across one decomposable and one sequential SWE-bench example
   - matrix defaults use `openrouter` for judging to keep the broader baseline phase tractable
+- the encoded follow-on execution order is now:
+  - `wave1_size3_pilot`
+  - `wave2_size5_pilot`
+  - `wave3_size8_pilot`
+  - each later wave is gated on the previous one being complete, interpretable, and free of unresolved execution-path bugs
 - the immediate engineering state is:
   - first-pass repo simplification is done enough to resume experiments cleanly
   - `cli.py` and `matrix.py` no longer carry all helper, family, and export logic inline

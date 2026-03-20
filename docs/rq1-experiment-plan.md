@@ -128,7 +128,8 @@ Minimum near-term set:
 
 Do not only vary topology label. Track at least:
 - `swarm size`
-  - `1`, `2`, `3`, `5` first
+  - `1`, `2`, `3`, `5`, `8`
+  - operationally gate widening as `3 -> 5 -> 8`, not a single all-sizes jump
 - `role differentiation`
   - homogeneous peers vs specialized roles
 - `coordination density`
@@ -156,7 +157,7 @@ So the post-RQ1 expansion goal is:
 
 **learn how Helm's behavioral dimensions behave across architecture family, swarm size, and task structure, not just across three hand-picked YAML archetypes**
 
-### Current Matrix Status (2026-03-13)
+### Current Matrix Status (2026-03-20)
 
 The matrix substrate is now implemented in the repo:
 - manifest:
@@ -170,7 +171,20 @@ The matrix substrate is now implemented in the repo:
 - repo-local skill:
   - `/Users/kenneth/Desktop/lab/projects/helm/.claude/skills/helm-matrix-generation/SKILL.md`
 
-Wave 0 has already started on the SymPy anchor, and the first live smoke run exposed a real DirectCLI process-group teardown bug that is now fixed. Treat this as evidence that the matrix smoke is doing its job: it is validating the experimental substrate, not just generating more YAML files.
+Wave 0 already served its substrate-smoke purpose on the SymPy anchor, including surfacing and fixing a real DirectCLI process-group teardown bug.
+
+The active post-hardening execution order is now:
+- `wave1_size3_pilot`
+  - single@1 plus all non-single families at size 3
+  - one decomposable and one sequential SWE-bench example
+- `wave2_size5_pilot`
+  - same family/task-pack structure, but size 5
+  - only after the size-3 pilot is complete and interpretable
+- `wave3_size8_pilot`
+  - same family/task-pack structure, but size 8
+  - only after the size-5 pilot is complete and stable enough to justify the budget
+
+This should be treated as the experimental gate before any broader breadth run or RL handoff.
 
 ---
 

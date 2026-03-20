@@ -124,6 +124,37 @@ waves:
       Pilot matrix over one example from each task pack to validate the family
       definitions before broad execution.
 
+  wave2_size5_pilot:
+    families:
+      - single
+      - independent
+      - centralized
+      - decentralized
+      - hybrid
+    sizes: [1, 5]
+    pack_examples:
+      decomposable_cross_module: 1
+      sequential_local: 1
+    notes: >-
+      Gated post-hardening size-5 pilot. Run only after the size-3 pilot is
+      complete, interpretable, and free of unresolved execution or judge-path bugs.
+
+  wave3_size8_pilot:
+    families:
+      - single
+      - independent
+      - centralized
+      - decentralized
+      - hybrid
+    sizes: [1, 8]
+    pack_examples:
+      decomposable_cross_module: 1
+      sequential_local: 1
+    notes: >-
+      Gated size-8 pilot. Run only after the size-5 pilot is complete and the
+      family templates remain stable enough that larger-swarm results are likely
+      to be scientifically interpretable rather than mostly harness noise.
+
   wave2:
     families:
       - single
