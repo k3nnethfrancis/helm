@@ -23,7 +23,7 @@ This breaks down into:
 
 ## Current Priority
 
-The current priority is **post-hardening baseline expansion before RL**.
+The current priority is **post-hardening baseline expansion before RL**, from a simplified repo shape that is ready for broader benchmark work again.
 
 Helm now has enough benchmark and reward-validation evidence to stop treating "can we run a basic cross-harness SWE-bench corpus?" as the main open question:
 - Claude and Codex both have validated SymPy baselines
@@ -51,7 +51,11 @@ Current judge direction:
 - the immediate next experimental step is the post-hardening matrix pilot:
   - `wave1_size3_pilot` in `configs/matrices/swebench_architecture_phase1.yaml`
   - single@1 plus all non-single families at size 3 across one decomposable and one sequential SWE-bench example
-  - matrix defaults now use `openrouter` for judging to keep the broader baseline phase tractable
+  - matrix defaults use `openrouter` for judging to keep the broader baseline phase tractable
+- the immediate engineering state is:
+  - first-pass repo simplification is done enough to resume experiments cleanly
+  - `cli.py` and `matrix.py` no longer carry all helper, family, and export logic inline
+  - further refactors should be justified by the next benchmark phase, not by cleanup for its own sake
 
 Primary planning reference for this phase:
 - `docs/judge-hardening-plan.md`
@@ -70,6 +74,11 @@ The matrix workflow now also has a repo-local skill:
 Generated matrix patterns under `patterns/generated/` are runtime artifacts, not
 source of truth. The source of truth for matrix conditions is the manifest in
 `configs/matrices/`.
+
+The repo is intentionally narrower than earlier phases:
+- no active Prime RL environment layer inside Helm
+- no active Tau / Terminal-Bench substrate inside Helm
+- no need to preserve one-off probe patterns once their outputs are durable in artifacts and notes
 
 ## Key Concepts
 
@@ -137,18 +146,22 @@ These dimensions are first evaluation instruments. Some may later become trainin
 
 ## Project Structure
 
-```
+```text
 helm/
 ├── CLAUDE.md             # You are here
 ├── README.md             # Public-facing overview
 ├── pyproject.toml        # Package config (hatchling build)
 ├── src/helm/             # Source package
 │   ├── __init__.py
-│   ├── cli.py            # Typer CLI (helm run, validate, judge, benchmark, analyze)
+│   ├── cli.py            # Main Typer command surface
+│   ├── cli_shared.py     # Shared CLI helpers (paths, escalation, turn limits, output)
+│   ├── cli_benchmark.py  # Benchmark/report/export CLI implementation helpers
 │   ├── collector.py      # Event aggregation and transcript generation
 │   ├── config.py         # Pydantic models for experiment YAML config
 │   ├── experiment.py     # Experiment lifecycle management
 │   ├── judge.py          # Dual-backend judge (OpenRouter + SDK headless)
+│   ├── matrix.py         # Matrix manifest loading, generation flow, and analysis
+│   ├── matrix_families.py # Architecture families, prompts, coordination/orchestrator defs
 │   ├── runtime_guard.py  # Rule-based intervention engine
 │   ├── run_data.py       # Run-data contract + orchestration evals
 │   └── sdk.py            # Python client for Sandbox Agent SDK REST/SSE

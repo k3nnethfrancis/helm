@@ -34,3 +34,7 @@ Project-state logs do not live here:
 - research log: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/research-log.md`
 
 Use the ledger as the continuity layer when restarting work.
+
+Source-structure note:
+- `src/helm/cli.py` is now the main command surface, with shared helpers in `src/helm/cli_shared.py` and benchmark/report/export implementation in `src/helm/cli_benchmark.py`
+- `src/helm/matrix.py` now focuses on manifest loading, generation flow, and summary analysis, while architecture family layouts/prompts live in `src/helm/matrix_families.py`
