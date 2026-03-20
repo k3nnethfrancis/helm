@@ -53,12 +53,12 @@ def test_prepare_benchmark_workspace_stages_repo_and_updates_cwd(tmp_path, monke
 
 def test_prepare_benchmark_workspace_skips_non_swebench(tmp_path) -> None:
     config = ExperimentConfig(
-        name="tau-bench-test",
+        name="custom-benchmark-test",
         agents=[AgentConfig(id="solver")],
         benchmark=BenchmarkConfig(
-            adapter="tau-bench",
+            adapter="custom-benchmark",
             dataset_path="/tmp/data.jsonl",
-            example_id="tau-1",
+            example_id="custom-1",
         ),
     )
 

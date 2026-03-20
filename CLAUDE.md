@@ -34,7 +34,7 @@ Helm now has enough benchmark and reward-validation evidence to stop treating "c
 That means the next sequence should be:
 - use the internal technical report and judge-hardening note as the current summary anchors
 - treat the hierarchical judge as validated enough for the next baseline phase
-- run broader `3 / 5 / 8` benchmark baselines, with SWE-bench as the default substrate and Terminal-Bench as an optional small follow-up sample if cost and verifier readiness are acceptable
+- run broader `3 / 5 / 8` benchmark baselines on SWE-bench before any RL handoff
 - move to the first Prime RL pilot only after the judge path is trustworthy enough for larger-scale benchmark comparisons
 
 Judge hardening should focus on:

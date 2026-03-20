@@ -61,7 +61,7 @@ def test_completion_verification_incomplete_run_is_not_called_system_failure(
 
 def test_command_verification_uses_exit_code(tmp_path: Path) -> None:
     benchmark = BenchmarkConfig(
-        adapter="tau-bench",
+        adapter="swebench",
         dataset_path="/tmp/data.jsonl",
         verifier={
             "mode": "command",

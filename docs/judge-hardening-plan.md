@@ -247,7 +247,6 @@ Output:
 4. Internal technical report on judge hardening outcomes and residual risks
 5. Post-hardening benchmark expansion:
    - main path: SWE-bench, `3 / 5 / 8`, Claude + Codex
-   - optional small probe: Terminal-Bench, only if cost and verifier readiness look acceptable
 6. Prime RL pilot design after the judge path clears the gate
 
 ## Go / No-Go Gate
@@ -260,4 +259,4 @@ Do not widen the matrix materially or move into RL until:
 
 ## Current Recommendation
 
-Treat SWE-bench as the default post-hardening benchmark substrate. Terminal-Bench is promising, but until verifier shape and cost are clearer it should stay a small follow-up probe, not the main baseline program.
+Treat SWE-bench as the default post-hardening benchmark substrate for this phase.

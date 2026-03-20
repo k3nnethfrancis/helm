@@ -76,7 +76,7 @@ The near-term deliverables are:
 1. an internal technical report on the current benchmark + reward-validation corpus
 2. a judge-hardening audit and implementation pass
 3. an internal technical report on judge hardening findings, fixes, and residual risks
-4. broader `3 / 5 / 8` benchmark baselines, defaulting to SWE-bench and using Terminal-Bench only as a small optional probe if cost and verifier readiness justify it
+4. broader `3 / 5 / 8` benchmark baselines on SWE-bench
 5. only after that, the first Prime RL pilot design
 
 The detailed work plan for this gate lives in:

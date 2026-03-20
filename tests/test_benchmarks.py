@@ -46,34 +46,9 @@ def test_swebench_adapter_loads_and_filters_examples(tmp_path) -> None:
     assert "tokenizer" in examples[0].prompt
 
 
-def test_tau_bench_adapter_filters_by_example_id(tmp_path) -> None:
-    dataset_path = tmp_path / "tau-bench-mini.jsonl"
-    _write_jsonl(
-        dataset_path,
-        [
-            {"task_id": "tau-1", "prompt": "Book a hotel in NYC", "split": "dev"},
-            {"task_id": "tau-2", "prompt": "Rebook canceled flight", "split": "dev"},
-        ],
-    )
-
-    config = BenchmarkConfig(
-        adapter="tau-bench",
-        dataset_path=str(dataset_path),
-        split="dev",
-        example_ids=["tau-2"],
-    )
-    adapter = get_adapter(config.adapter)
-    examples = adapter.load_examples(config)
-
-    assert len(examples) == 1
-    assert examples[0].example_id == "tau-2"
-    assert "flight" in examples[0].prompt
-
-
 def test_available_adapters_lists_expected_names() -> None:
     adapters = available_adapters()
     assert "swebench" in adapters
-    assert "tau-bench" in adapters
 
 
 def test_benchmark_config_alias_and_example_id_dedup() -> None:
@@ -93,8 +68,8 @@ def test_benchmark_config_alias_and_example_id_dedup() -> None:
 
 def test_benchmark_config_verifier_helpers() -> None:
     config = BenchmarkConfig(
-        adapter="tau-bench",
-        dataset_path="/tmp/tau.jsonl",
+        adapter="swebench",
+        dataset_path="/tmp/data.jsonl",
         verifier={
             "mode": "command",
             "command": "python verify.py",
