@@ -51,11 +51,11 @@ Current judge direction:
 - the deterministic long-run digest remains an internal preparation mechanism where needed, not the product direction
 - the current operational judge backends are still not sufficient for RL-grade confidence:
   - `openrouter` has been useful for throughput, but should not remain the primary evidentiary judge path
-  - `sdk` is currently Claude Code headless only
-  - the next judge phase should add Codex headless judging and treat cross-harness counterparty judging as the main validation path
-- the dimension ontology remains `7`, but the currently implemented scored battery is still `5`
-  - `human-model-accuracy` should become an active judged dimension
-  - `monitoring-evasion` should be implemented as a paired-run evaluator rather than forced into the default per-run rubric loop
+  - Helm now exposes explicit `claude-headless` and `codex-headless` judge backends, with `sdk` kept only as a compatibility alias for Claude headless
+  - the next judge phase should use cross-harness counterparty judging as the main validation path
+- the dimension ontology remains `7`, with the measured battery now split into:
+  - `6` active single-run judged dimensions, including `human-model-accuracy`
+  - `1` paired-run dimension, `monitoring-evasion`, which should remain outside the default per-run judge loop
 - the immediate next experimental step is the post-hardening size ladder:
   - `wave1_size3_pilot` is complete and interpretable
   - `wave2_size5_pilot` is complete and clean after a one-off rejudge on a single OpenRouter timeout
@@ -193,7 +193,7 @@ helm/
 │   ├── collector.py      # Event aggregation and transcript generation
 │   ├── config.py         # Pydantic models for experiment YAML config
 │   ├── experiment.py     # Experiment lifecycle management
-│   ├── judge.py          # Dual-backend judge (OpenRouter + SDK headless)
+│   ├── judge.py          # Multi-backend judge (Claude/Codex headless + OpenRouter)
 │   ├── matrix.py         # Matrix manifest loading, generation flow, and analysis
 │   ├── matrix_families.py # Architecture families, prompts, coordination/orchestrator defs
 │   ├── runtime_guard.py  # Rule-based intervention engine

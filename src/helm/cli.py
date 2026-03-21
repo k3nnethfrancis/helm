@@ -25,6 +25,7 @@ from helm.benchmarks import (
     write_task_verification,
 )
 from helm.cli_benchmark import (
+    DEFAULT_OPENROUTER_JUDGE_MODEL,
     MATRIX_FIELD_NAMES,
     benchmark_export_impl,
     benchmark_export_orchestration_impl,
@@ -36,6 +37,7 @@ from helm.cli_benchmark import (
     load_dimension_categories as _load_dimension_categories,
     matrix_payload as _matrix_payload,
     merge_dimensions as _merge_dimensions,
+    normalize_judge_backend_name as _normalize_judge_backend_name,
 )
 from helm.cli_shared import (
     ACTIVE_BEHAVIORAL_DIMENSIONS,
@@ -974,9 +976,12 @@ def judge_experiment_cmd(
         str,
         typer.Option(
             "--backend", "-b",
-            help="Judge backend: 'sdk' (free) or 'openrouter'",
+            help=(
+                "Judge backend: 'claude-headless', 'codex-headless', or 'openrouter' "
+                "('sdk' accepted as a legacy alias)"
+            ),
         ),
-    ] = "sdk",
+    ] = "claude-headless",
     strategy: Annotated[
         str,
         typer.Option(
@@ -988,7 +993,7 @@ def judge_experiment_cmd(
         str | None,
         typer.Option(
             "--model", "-m",
-            help="Model for openrouter backend (e.g., 'google/gemini-2.0-flash-001')",
+            help="Optional judge model override for the selected backend",
         ),
     ] = None,
     experiments_dir: Annotated[
@@ -1001,9 +1006,10 @@ def judge_experiment_cmd(
 ) -> None:
     """Score a completed experiment against behavioral dimensions."""
     from helm.judge import (
+        ClaudeHeadlessJudge,
+        CodexHeadlessJudge,
         ExperimentScores,
         OpenRouterJudge,
-        SDKJudge,
         judge_experiment,
     )
     from helm.run_data import save_run_data
@@ -1042,23 +1048,40 @@ def judge_experiment_cmd(
     else:
         dimension_list = DEFAULT_JUDGE_DIMENSIONS.copy()
 
+    backend = _normalize_judge_backend_name(backend)
+
     # Create backend
-    judge_backend: OpenRouterJudge | SDKJudge
+    judge_backend: OpenRouterJudge | ClaudeHeadlessJudge | CodexHeadlessJudge
     if backend == "openrouter":
-        judge_model = model or "google/gemini-2.0-flash-001"
+        judge_model = model or DEFAULT_OPENROUTER_JUDGE_MODEL
         try:
             judge_backend = OpenRouterJudge(model=judge_model)
         except ValueError as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(1)
-    elif backend == "sdk":
-        judge_backend = SDKJudge()
+    elif backend == "claude-headless":
+        judge_model = model
+        judge_backend = ClaudeHeadlessJudge(model=judge_model)
+    elif backend == "codex-headless":
+        judge_model = model
+        judge_backend = CodexHeadlessJudge(model=judge_model)
     else:
-        typer.echo(f"Error: Unknown backend '{backend}'. Use 'sdk' or 'openrouter'.", err=True)
+        typer.echo(
+            (
+                f"Error: Unknown backend '{backend}'. Use 'claude-headless', "
+                "'codex-headless', or 'openrouter'."
+            ),
+            err=True,
+        )
         raise typer.Exit(1)
 
     typer.echo(f"Judging experiment: {experiment_id}")
-    typer.echo(f"Backend: {backend}" + (f" ({model or 'google/gemini-2.0-flash-001'})" if backend == "openrouter" else " (Claude Code headless)"))
+    if backend == "openrouter":
+        typer.echo(f"Backend: {backend} ({judge_model})")
+    elif judge_model:
+        typer.echo(f"Backend: {backend} ({judge_model})")
+    else:
+        typer.echo(f"Backend: {backend}")
     typer.echo(f"Strategy: {strategy}")
     typer.echo(f"Dimensions: {', '.join(dimension_list)}")
     typer.echo()
@@ -1071,7 +1094,7 @@ def judge_experiment_cmd(
                 judges_dir=judges_dir,
                 backend=judge_backend,
                 backend_name=backend,
-                model_name=judge_model if backend == "openrouter" else None,
+                model_name=judge_model,
                 strategy=strategy,
             )
         )

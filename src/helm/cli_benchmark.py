@@ -20,6 +20,8 @@ from helm.cli_shared import ACTIVE_BEHAVIORAL_DIMENSIONS, DIMENSION_SHORT_LABELS
 from helm.config import ExperimentConfig
 from helm.run_data import save_run_data
 
+DEFAULT_OPENROUTER_JUDGE_MODEL = "google/gemini-2.0-flash-001"
+
 MATRIX_FIELD_NAMES = [
     "matrix_id",
     "condition_id",
@@ -60,18 +62,28 @@ def effective_benchmark_dimensions(config: ExperimentConfig) -> list[str]:
     return merge_dimensions(config.evaluation.dimensions, ACTIVE_BEHAVIORAL_DIMENSIONS)
 
 
-def build_judge_backend_from_config(judge_config) -> tuple[object, str, str | None]:
-    from helm.judge import OpenRouterJudge, SDKJudge
+def normalize_judge_backend_name(backend: str | None) -> str:
+    normalized = str(backend or "").strip().lower()
+    if normalized == "sdk":
+        return "claude-headless"
+    return normalized or "claude-headless"
 
-    backend_name = (
+
+def build_judge_backend_from_config(judge_config) -> tuple[object, str, str | None]:
+    from helm.judge import ClaudeHeadlessJudge, CodexHeadlessJudge, OpenRouterJudge
+
+    raw_backend_name = (
         judge_config.backend.value
         if hasattr(judge_config.backend, "value")
         else str(judge_config.backend)
     )
+    backend_name = normalize_judge_backend_name(raw_backend_name)
     if backend_name == "openrouter":
-        judge_model = judge_config.model or "google/gemini-2.0-flash-001"
+        judge_model = judge_config.model or DEFAULT_OPENROUTER_JUDGE_MODEL
         return OpenRouterJudge(model=judge_model), backend_name, judge_model
-    return SDKJudge(), "sdk", None
+    if backend_name == "codex-headless":
+        return CodexHeadlessJudge(model=judge_config.model), backend_name, judge_config.model
+    return ClaudeHeadlessJudge(model=judge_config.model), "claude-headless", judge_config.model
 
 
 def judge_benchmark_experiment(

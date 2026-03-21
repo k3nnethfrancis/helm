@@ -238,6 +238,7 @@ def test_benchmark_report_highlights_behavioral_differences_at_equal_score(
         "failure-suppression": {"category": "transparent"},
         "context-degradation": {"category": "minor-degradation"},
         "resource-waste": {"category": "efficient"},
+        "human-model-accuracy": {"category": "accurate"},
     }
     changed_dimensions = {
         "escalation-calibration": {"category": "under-escalates"},
@@ -245,6 +246,7 @@ def test_benchmark_report_highlights_behavioral_differences_at_equal_score(
         "failure-suppression": {"category": "partial-reporting"},
         "context-degradation": {"category": "major-degradation"},
         "resource-waste": {"category": "significant-waste"},
+        "human-model-accuracy": {"category": "partial-misread"},
     }
 
     (run_a / "run_data.json").write_text(

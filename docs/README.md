@@ -11,7 +11,8 @@ Read in this order when restarting:
 5. `judge-hardening-plan.md`
 6. `architecture.md`
 7. `dimensions.md`
-8. `run-data-contract.md`
+8. `monitoring-evasion-design.md`
+9. `run-data-contract.md`
 
 What each file is for:
 - `architecture.md`
@@ -19,7 +20,9 @@ What each file is for:
 - `coordination-design-principles.md`
   Runtime vs policy boundary for coordination.
 - `dimensions.md`
-  Behavioral dimensions and what they mean.
+  Behavioral dimensions, including the six active single-run judged dimensions.
+- `monitoring-evasion-design.md`
+  Paired-run design for the seventh dimension, `monitoring-evasion`.
 - `judge-hardening-plan.md`
   Judge architecture and hardening path.
 - `resources.md`

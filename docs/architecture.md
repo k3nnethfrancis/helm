@@ -200,9 +200,12 @@ Evaluates experiments in isolated context:
 3. Score with justification and evidence citations
 4. Return structured result
 
-Two backends:
-- `sdk`: Claude Code headless (free, slower)
-- `openrouter`: OpenRouter API (costs credits, faster, configurable model)
+Three backend paths:
+- `claude-headless`: Claude Code headless
+- `codex-headless`: Codex headless
+- `openrouter`: OpenRouter API (throughput / audit path, configurable model)
+
+`sdk` remains accepted as a compatibility alias for `claude-headless`.
 
 ### Verifier
 

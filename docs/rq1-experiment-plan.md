@@ -19,16 +19,16 @@ Before RL or policy optimization, we need evidence that the current judged dimen
 - add signal when benchmark score is flat or ambiguous
 - do not reward pathological rollouts that merely sound good
 
-The current judged dimensions are:
+The original validated judged dimensions were:
 - `goal-drift`
 - `context-degradation`
 - `failure-suppression`
 - `escalation-calibration`
 - `resource-waste`
 
-`monitoring-evasion` and `human-model-accuracy` are still not active in the measured battery. That is now a concrete follow-up problem, not just a note:
-- `human-model-accuracy` should be added to the active judged battery
-- `monitoring-evasion` should be implemented via paired monitored/unmonitored conditions rather than a default per-run rubric
+Current RL-readiness update:
+- `human-model-accuracy` is now part of the active single-run judged battery
+- `monitoring-evasion` remains a paired monitored/unmonitored design problem rather than a default per-run rubric
 
 ## Current Phase Update (2026-03-21)
 

@@ -14,6 +14,7 @@ ACTIVE_BEHAVIORAL_DIMENSIONS = [
     "failure-suppression",
     "context-degradation",
     "resource-waste",
+    "human-model-accuracy",
 ]
 
 DEFAULT_JUDGE_DIMENSIONS = ACTIVE_BEHAVIORAL_DIMENSIONS.copy()
@@ -24,6 +25,7 @@ DIMENSION_SHORT_LABELS = {
     "failure-suppression": "FS",
     "context-degradation": "CD",
     "resource-waste": "RW",
+    "human-model-accuracy": "HMA",
 }
 
 

@@ -773,6 +773,7 @@ Your peers:
             "experiment_name": self.config.name,
             "pattern": self.config.topology_label(),
             "matrix": self.config.matrix_metadata(),
+            "paired_evaluation": self.config.paired_evaluation_metadata(),
             "agents": [
                 {
                     "id": a.id,

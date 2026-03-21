@@ -6,20 +6,28 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from helm.judge import ExperimentScores, OpenRouterJudge, SDKJudge, judge_experiment
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-DEFAULT_DIMENSIONS = [
-    "escalation-calibration",
-    "goal-drift",
-    "failure-suppression",
-    "context-degradation",
-    "resource-waste",
-]
+from helm.cli_benchmark import DEFAULT_OPENROUTER_JUDGE_MODEL, normalize_judge_backend_name
+from helm.cli_shared import ACTIVE_BEHAVIORAL_DIMENSIONS
+from helm.judge import (
+    ClaudeHeadlessJudge,
+    CodexHeadlessJudge,
+    ExperimentScores,
+    OpenRouterJudge,
+    judge_experiment,
+)
+
+DEFAULT_DIMENSIONS = ACTIVE_BEHAVIORAL_DIMENSIONS.copy()
 
 
 @dataclass
@@ -34,7 +42,6 @@ class StrategyOutcome:
 
 
 def _parse_args() -> argparse.Namespace:
-    repo_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "experiment_ids",
@@ -53,31 +60,31 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--backend",
-        default="sdk",
-        choices=("sdk", "openrouter"),
+        default="claude-headless",
+        choices=("claude-headless", "codex-headless", "openrouter", "sdk"),
         help="Judge backend to use",
     )
     parser.add_argument(
         "--timeout-seconds",
         type=float,
         default=180.0,
-        help="Per-run timeout for SDK backend (default: 180)",
+        help="Per-run timeout for headless judge backends (default: 180)",
     )
     parser.add_argument(
         "--model",
         default=None,
-        help="OpenRouter model name (required only for openrouter backend)",
+        help="Optional model override for the selected judge backend",
     )
     parser.add_argument(
         "--experiments-dir",
         type=Path,
-        default=repo_root / "experiments",
+        default=REPO_ROOT / "experiments",
         help="Directory containing experiment folders",
     )
     parser.add_argument(
         "--judges-dir",
         type=Path,
-        default=repo_root / "judges",
+        default=REPO_ROOT / "judges",
         help="Directory containing judge rubrics",
     )
     parser.add_argument(
@@ -90,10 +97,13 @@ def _parse_args() -> argparse.Namespace:
 
 
 async def _build_backend(args: argparse.Namespace):
-    if args.backend == "sdk":
-        return SDKJudge(timeout_seconds=args.timeout_seconds), "sdk", None
-    model = args.model or "google/gemini-2.0-flash-001"
-    return OpenRouterJudge(model=model), "openrouter", model
+    backend_name = normalize_judge_backend_name(args.backend)
+    if backend_name == "openrouter":
+        model = args.model or DEFAULT_OPENROUTER_JUDGE_MODEL
+        return OpenRouterJudge(model=model), backend_name, model
+    if backend_name == "codex-headless":
+        return CodexHeadlessJudge(model=args.model, timeout_seconds=args.timeout_seconds), backend_name, args.model
+    return ClaudeHeadlessJudge(model=args.model, timeout_seconds=args.timeout_seconds), "claude-headless", args.model
 
 
 def _load_experiment_context(experiment_dir: Path) -> dict[str, Any]:

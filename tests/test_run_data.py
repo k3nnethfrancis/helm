@@ -354,8 +354,10 @@ def test_save_run_data_includes_judge_scores(tmp_path) -> None:
     transcript = _sample_transcript()
     scores = {
         "experiment_id": "exp-1",
-        "judge_backend": "sdk",
+        "judge_backend": "claude-headless",
         "judge_model": None,
+        "judge_role": "primary",
+        "preparation_path": "single-pass",
         "scores": [
             {
                 "dimension": "goal-drift",
@@ -396,6 +398,9 @@ def test_save_run_data_includes_judge_scores(tmp_path) -> None:
     assert payload["run"]["termination_reason"] == "completion_signal"
     assert payload["run"]["system_failure"] is False
     assert payload["evals"]["judge"]["scores"]["goal-drift"] == 7
+    assert payload["evals"]["judge"]["backend"] == "claude-headless"
+    assert payload["evals"]["judge"]["role"] == "primary"
+    assert payload["evals"]["judge"]["preparation_path"] == "single-pass"
     assert payload["config"]["matrix"]["condition_id"] == "wave0-decentralized-2"
     assert payload["transcript"]["total_events"] == 12
     assert payload["transcript"]["coordination_summary"]["by_medium"]["filesystem"] == 2
@@ -529,6 +534,13 @@ def test_run_data_v2_categorical_scores(tmp_path) -> None:
                 "justification": "All errors reported",
                 "evidence": [],
             },
+            {
+                "dimension": "human-model-accuracy",
+                "category": "accurate",
+                "severity": "none",
+                "justification": "Intent tracked correctly",
+                "evidence": [],
+            },
         ],
     }
 
@@ -551,6 +563,9 @@ def test_run_data_v2_categorical_scores(tmp_path) -> None:
     fs = judge["scores"]["failure-suppression"]
     assert fs["category"] == "transparent"
     assert fs["severity"] == "none"
+    hma = judge["scores"]["human-model-accuracy"]
+    assert hma["category"] == "accurate"
+    assert hma["severity"] == "none"
 
 
 def test_build_run_data_marks_single_agent_completed_when_run_completes(tmp_path) -> None:
@@ -635,7 +650,7 @@ def test_run_data_v1_numeric_scores_backward_compat(tmp_path) -> None:
     }
     scores_v1 = {
         "experiment_id": "exp-v1",
-        "judge_backend": "sdk",
+        "judge_backend": "claude-headless",
         "judge_model": None,
         "scores": [
             {
@@ -674,6 +689,12 @@ def test_run_data_preserves_judge_strategy_metadata(tmp_path) -> None:
                 "experiment_id": "exp-h",
                 "experiment_name": "exp-h",
                 "pattern": "peer-network",
+                "paired_evaluation": {
+                    "comparison_id": "monitor-pair-1",
+                    "comparison_role": "monitored",
+                    "comparison_axis": "monitoring-evasion",
+                    "visible_monitoring": True,
+                },
                 "created_at": "2026-03-15T10:00:00",
                 "task": "judge metadata",
                 "agents": [{"id": "a"}],
@@ -698,9 +719,11 @@ def test_run_data_preserves_judge_strategy_metadata(tmp_path) -> None:
             {
                 "schema_version": "v2",
                 "experiment_id": "exp-h",
-                "judge_backend": "sdk",
+                "judge_backend": "claude-headless",
                 "judge_model": None,
+                "judge_role": "audit",
                 "strategy": "hierarchical",
+                "preparation_path": "hierarchical-synthesis",
                 "input_view_type": "hierarchical-synthesis",
                 "input_preparation": {"used_digest": False, "used_truncation": False},
                 "artifacts": {"communication_view": {"json": "judge_artifacts/communication_view.json"}},
@@ -731,7 +754,12 @@ def test_run_data_preserves_judge_strategy_metadata(tmp_path) -> None:
 
     judge = payload["evals"]["judge"]
     assert judge is not None
+    assert judge["backend"] == "claude-headless"
+    assert judge["role"] == "audit"
     assert judge["strategy"] == "hierarchical"
+    assert judge["preparation_path"] == "hierarchical-synthesis"
     assert judge["input_view_type"] == "hierarchical-synthesis"
     assert judge["artifacts"]["communication_view"]["json"] == "judge_artifacts/communication_view.json"
     assert judge["audit"]["rubrics"]["goal-drift"]["sha256"] == "abc123"
+    assert payload["experiment"]["paired_evaluation"]["comparison_id"] == "monitor-pair-1"
+    assert payload["config"]["paired_evaluation"]["visible_monitoring"] is True

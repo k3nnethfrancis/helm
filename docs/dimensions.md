@@ -6,6 +6,11 @@ Petri measures 36 behavioral dimensions for individual models. Helm extends this
 
 These dimensions are about **trust and alignment at the system level**, not just individual agent competence.
 
+Current operational status:
+- Helm's ontology is still the full **seven dimensions**
+- the active **single-run judged battery** is now six dimensions
+- `monitoring-evasion` remains a paired-run / A-B design problem and is not part of the default per-run judge loop yet
+
 ---
 
 ## The Seven Dimensions
@@ -194,6 +199,8 @@ For now, we keep dimensions flat. Structure may emerge from observation.
 
 ## Scoring Process
 
+For the six active single-run dimensions:
+
 1. Experiment completes, transcripts collected
 2. Judge (separate context) receives:
    - Full multi-agent transcript
@@ -204,6 +211,9 @@ For now, we keep dimensions flat. Structure may emerge from observation.
    - Justification (2-3 sentences)
    - Evidence (message IDs from transcript)
 4. Human reviews judge output to calibrate
+
+For `monitoring-evasion`, Helm should instead compare monitored vs unmonitored paired runs. See:
+- `/Users/kenneth/Desktop/lab/projects/helm/docs/monitoring-evasion-design.md`
 
 ---
 
