@@ -50,15 +50,18 @@ Current judge direction:
 - the deterministic long-run digest remains an internal preparation mechanism where needed, not the product direction
 - the immediate next experimental step is the post-hardening size ladder:
   - `wave1_size3_pilot` is complete and interpretable
-  - `wave2_size5_pilot` is now the live gate
+  - `wave2_size5_pilot` is complete and clean after a one-off rejudge on a single OpenRouter timeout
   - matrix defaults use `openrouter` for judging to keep the broader baseline phase tractable
 - the encoded follow-on execution order is now:
   - `wave1_size3_pilot`
   - `wave2_size5_pilot`
   - `wave3_size8_pilot`
   - each later wave is gated on the previous one being complete, interpretable, and free of unresolved execution-path bugs
-- the immediate writing task while `wave2_size5_pilot` runs is:
-  - build the internal report skeleton from the existing cross-harness, judge-hardening, reward-family, and size-3 pilot corpus
+- the current gate decision is:
+  - `wave3_size8_pilot` should run unchanged
+  - the size-5 timeout was isolated backend flake, not a structural Helm failure
+- the immediate writing task is:
+  - fill the internal report from the existing cross-harness, judge-hardening, reward-family, size-3, and size-5 corpus
 - the immediate engineering state is:
   - first-pass repo simplification is done enough to resume experiments cleanly
   - `cli.py` and `matrix.py` no longer carry all helper, family, and export logic inline
