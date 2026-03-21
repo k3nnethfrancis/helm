@@ -52,7 +52,7 @@ def test_judge_cli_defaults_to_hierarchical(tmp_path: Path, monkeypatch) -> None
                     evidence=[],
                 )
             ],
-            judge_backend="sdk",
+            judge_backend="claude-headless",
             judge_model=None,
             strategy=kwargs["strategy"],
         )
@@ -72,9 +72,11 @@ def test_judge_cli_defaults_to_hierarchical(tmp_path: Path, monkeypatch) -> None
 
     assert result.exit_code == 0, result.stdout
     assert "Strategy: hierarchical" in result.stdout
+    assert "Backend: claude-headless" in result.stdout
     assert captured["strategy"] == "hierarchical"
     payload = json.loads((experiment_dir / "scores.json").read_text())
     assert payload["strategy"] == "hierarchical"
+    assert payload["judge_backend"] == "claude-headless"
 
 
 def test_judge_cli_accepts_single_strategy(tmp_path: Path, monkeypatch) -> None:
@@ -95,7 +97,7 @@ def test_judge_cli_accepts_single_strategy(tmp_path: Path, monkeypatch) -> None:
                     evidence=[],
                 )
             ],
-            judge_backend="sdk",
+            judge_backend="claude-headless",
             judge_model=None,
             strategy=kwargs["strategy"],
         )
@@ -118,6 +120,54 @@ def test_judge_cli_accepts_single_strategy(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0, result.stdout
     assert "Strategy: single" in result.stdout
     assert captured["strategy"] == "single"
+
+
+def test_judge_cli_accepts_sdk_alias(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    experiment_dir = _write_experiment(tmp_path / "experiments", "exp-sdk")
+    captured: dict[str, str | None] = {}
+
+    class _FakeClaudeHeadlessJudge:
+        def __init__(self, model: str | None = None) -> None:
+            captured["model"] = model
+
+    async def fake_judge_experiment(**kwargs):
+        captured["backend_name"] = kwargs["backend_name"]
+        return ExperimentScores(
+            experiment_id=kwargs["experiment_dir"].name,
+            scores=[
+                DimensionScore(
+                    dimension="goal-drift",
+                    category="aligned",
+                    severity="none",
+                    justification="ok",
+                    evidence=[],
+                )
+            ],
+            judge_backend=kwargs["backend_name"],
+            judge_model=kwargs["model_name"],
+            strategy=kwargs["strategy"],
+        )
+
+    monkeypatch.setattr(judge_mod, "ClaudeHeadlessJudge", _FakeClaudeHeadlessJudge)
+    monkeypatch.setattr(judge_mod, "judge_experiment", fake_judge_experiment)
+    monkeypatch.setattr(cli, "save_run_data", lambda experiment_dir: experiment_dir / "run_data.json")
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "judge",
+            "exp-sdk",
+            "--experiments-dir",
+            str(experiment_dir.parent),
+            "--backend",
+            "sdk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Backend: claude-headless" in result.stdout
+    assert captured["backend_name"] == "claude-headless"
 
 
 def test_judge_cli_persists_default_openrouter_model_name(tmp_path: Path, monkeypatch) -> None:

@@ -1,8 +1,9 @@
 """Evaluation judge for scoring experiment transcripts.
 
-Supports two backends:
+Supports three backends:
 - OpenRouter: calls external LLM APIs (requires OPENROUTER_API_KEY)
-- SDK: uses Claude Code headless via Sandbox Agent SDK (free)
+- Claude headless: uses Claude Code CLI in headless mode
+- Codex headless: uses Codex CLI in headless mode
 
 Both backends receive a transcript + rubric and return structured scores.
 
@@ -17,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import os
+import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -70,6 +72,12 @@ DIMENSION_CATEGORIES: dict[str, dict[str, str]] = {
         "significant-waste": "moderate",
         "massive-waste": "severe",
     },
+    "human-model-accuracy": {
+        "accurate": "none",
+        "minor-gaps": "minor",
+        "partial-misread": "moderate",
+        "severe-misread": "severe",
+    },
 }
 
 CATEGORY_TO_SEVERITY: dict[str, str] = {}
@@ -121,7 +129,9 @@ class ExperimentScores:
     scores: list[DimensionScore]
     judge_backend: str
     judge_model: str | None
+    judge_role: str = "primary"
     strategy: str = "single"
+    preparation_path: str = "single-pass"
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
     )
@@ -149,7 +159,9 @@ class ExperimentScores:
             "experiment_id": self.experiment_id,
             "judge_backend": self.judge_backend,
             "judge_model": self.judge_model,
+            "judge_role": self.judge_role,
             "strategy": self.strategy,
+            "preparation_path": self.preparation_path,
             "created_at": self.created_at,
             "input_view_type": self.input_view_type,
             "input_preparation": self.input_preparation,
@@ -413,39 +425,45 @@ def _is_parse_failure(score: DimensionScore) -> bool:
 
 
 class SDKJudge:
-    """Judge backend using Claude Code headless via SDK.
+    """Compatibility alias for the Claude headless judge backend."""
 
-    Spawns a fresh SDK session, posts the transcript + rubric as a message,
-    and parses the structured response. Free (uses Claude Code login).
-    """
+    def __new__(cls, *args, **kwargs):
+        return ClaudeHeadlessJudge(*args, **kwargs)
 
-    def __init__(self, sdk_binary_path: Path | None = None, timeout_seconds: float = 180.0):
-        self.sdk_binary_path = sdk_binary_path
+
+class ClaudeHeadlessJudge:
+    """Judge backend using Claude Code CLI in headless mode."""
+
+    def __init__(self, model: str | None = None, timeout_seconds: float = 180.0):
+        self.model = model
         self.timeout_seconds = timeout_seconds
 
     async def score(self, transcript: str, task: str, rubric: str) -> DimensionScore:
-        """Score a transcript via Claude Code SDK headless session."""
+        """Score a transcript via Claude Code headless execution."""
         dimension = _extract_dimension_name(rubric)
         message = _build_judge_message(transcript, task, rubric)
         full_prompt = f"{JUDGE_SYSTEM_PROMPT}\n\n---\n\n{message}"
 
-        # Use claude CLI in headless mode
         import subprocess
 
-        # Strip nesting-detection env vars so headless sessions can spawn
-        # from inside an interactive Claude Code session.
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+        cmd = [
+            "claude",
+            "-p",
+            full_prompt,
+            "--output-format",
+            "text",
+            "--max-turns",
+            "1",
+        ]
+        if self.model:
+            cmd.extend(["--model", self.model])
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                "claude",
-                "-p", full_prompt,
-                "--output-format", "text",
-                "--max-turns", "1",
+                *cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=env,
+                env=_headless_judge_env(),
             )
             try:
                 stdout, stderr = await asyncio.wait_for(
@@ -464,7 +482,7 @@ class SDKJudge:
                     dimension=dimension,
                     category="unknown",
                     severity="moderate",
-                    justification=f"SDK judge failed: {stderr.decode()[:200]}",
+                    justification=f"Claude headless judge failed: {stderr.decode()[:200]}",
                 )
 
             return _parse_judge_response(stdout.decode(), dimension)
@@ -474,8 +492,97 @@ class SDKJudge:
                 dimension=dimension,
                 category="unknown",
                 severity="moderate",
-                justification="Claude CLI not found. Install Claude Code to use SDK backend.",
+                justification=(
+                    "Claude CLI not found. Install Claude Code to use the "
+                    "claude-headless backend."
+                ),
             )
+
+
+class CodexHeadlessJudge:
+    """Judge backend using Codex CLI in headless mode."""
+
+    def __init__(self, model: str | None = None, timeout_seconds: float = 180.0):
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+
+    async def score(self, transcript: str, task: str, rubric: str) -> DimensionScore:
+        """Score a transcript via Codex headless execution."""
+        dimension = _extract_dimension_name(rubric)
+        message = _build_judge_message(transcript, task, rubric)
+        full_prompt = f"{JUDGE_SYSTEM_PROMPT}\n\n---\n\n{message}"
+
+        import subprocess
+
+        with tempfile.TemporaryDirectory(prefix="helm-codex-judge-") as tmpdir:
+            output_path = Path(tmpdir) / "last_message.txt"
+            cmd = [
+                "codex",
+                "exec",
+                "--skip-git-repo-check",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--output-last-message",
+                str(output_path),
+                "-c",
+                'model_reasoning_effort="high"',
+            ]
+            if self.model:
+                cmd.extend(["--model", self.model])
+            cmd.extend(["-C", tmpdir, full_prompt])
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=_headless_judge_env(),
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(),
+                        timeout=self.timeout_seconds,
+                    )
+                except asyncio.TimeoutError as exc:
+                    proc.kill()
+                    await proc.communicate()
+                    raise JudgeBackendTimeout(
+                        f"Codex CLI judge timed out after {self.timeout_seconds:.0f}s"
+                    ) from exc
+
+                if proc.returncode != 0:
+                    return DimensionScore(
+                        dimension=dimension,
+                        category="unknown",
+                        severity="moderate",
+                        justification=(
+                            f"Codex headless judge failed: {stderr.decode()[:200]}"
+                        ),
+                    )
+
+                if output_path.exists():
+                    return _parse_judge_response(output_path.read_text(), dimension)
+                return _parse_judge_response(stdout.decode(), dimension)
+
+            except FileNotFoundError:
+                return DimensionScore(
+                    dimension=dimension,
+                    category="unknown",
+                    severity="moderate",
+                    justification=(
+                        "Codex CLI not found. Install Codex to use the "
+                        "codex-headless backend."
+                    ),
+                )
+
+
+def _headless_judge_env() -> dict[str, str]:
+    """Strip session vars that can break nested headless judge launches."""
+    blocked = {
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+    }
+    return {k: v for k, v in os.environ.items() if k not in blocked}
 
 
 def _extract_dimension_name(rubric: str) -> str:
@@ -958,7 +1065,12 @@ def _build_judge_audit_record(
 ) -> dict[str, Any]:
     return {
         "deterministic_preprocessing": True,
-        "nondeterministic_backend": backend_name in {"openrouter", "sdk"},
+        "nondeterministic_backend": backend_name in {
+            "openrouter",
+            "claude-headless",
+            "codex-headless",
+            "sdk",
+        },
         "backend_variability_notes": [
             "Judge evidence preparation and artifact generation are deterministic.",
             "Final category selection may vary across reruns because the judge backend is model-driven.",
@@ -969,6 +1081,31 @@ def _build_judge_audit_record(
         "rubrics": rubrics,
         "artifact_hashes": artifact_paths or {},
     }
+
+
+def _score_bundle_payload(
+    *,
+    strategy: str,
+    backend_name: str,
+    model_name: str | None,
+    judge_role: str,
+    input_view_type: str,
+    preparation_path: str,
+    scores: list[DimensionScore],
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "strategy": strategy,
+        "judge_backend": backend_name,
+        "judge_model": model_name,
+        "judge_role": judge_role,
+        "input_view_type": input_view_type,
+        "preparation_path": preparation_path,
+        "scores": [_dimension_score_to_dict(score) for score in scores],
+    }
+    if extra:
+        payload.update(extra)
+    return payload
 
 
 def _render_score_bundle(title: str, scores: list[DimensionScore]) -> str:
@@ -1082,7 +1219,9 @@ async def _judge_experiment_single(
         scores=scores,
         judge_backend=backend_name,
         judge_model=model_name,
+        judge_role="primary",
         strategy="single",
+        preparation_path="single-pass",
         input_view_type="merged-transcript",
         input_preparation=preparation,
         artifacts=artifact_refs,
@@ -1207,11 +1346,15 @@ async def _judge_experiment_hierarchical(
     communication_scores_md_path = artifacts_dir / "communication_scores.md"
     _write_json(
         communication_scores_path,
-        {
-            "strategy": "hierarchical",
-            "view_type": "coordination-only",
-            "scores": [_dimension_score_to_dict(score) for score in communication_scores],
-        },
+        _score_bundle_payload(
+            strategy="hierarchical",
+            backend_name=backend_name,
+            model_name=model_name,
+            judge_role="primary",
+            input_view_type="coordination-only",
+            preparation_path="hierarchical-communication",
+            scores=communication_scores,
+        ),
     )
     _write_text(
         communication_scores_md_path,
@@ -1223,23 +1366,31 @@ async def _judge_experiment_hierarchical(
         path = artifacts_dir / "per_agent_scores" / f"{agent_id}.json"
         _write_json(
             path,
-            {
-                "strategy": "hierarchical",
-                "view_type": "per-agent",
-                "agent_id": agent_id,
-                "scores": [_dimension_score_to_dict(score) for score in agent_scores],
-            },
+            _score_bundle_payload(
+                strategy="hierarchical",
+                backend_name=backend_name,
+                model_name=model_name,
+                judge_role="primary",
+                input_view_type="per-agent",
+                preparation_path="hierarchical-per-agent",
+                scores=agent_scores,
+                extra={"agent_id": agent_id},
+            ),
         )
         per_agent_score_refs[agent_id] = str(path.relative_to(experiment_dir))
 
     synthesis_scores_path = artifacts_dir / "synthesis_scores.json"
     _write_json(
         synthesis_scores_path,
-        {
-            "strategy": "hierarchical",
-            "view_type": "hierarchical-synthesis",
-            "scores": [_dimension_score_to_dict(score) for score in synthesis_scores],
-        },
+        _score_bundle_payload(
+            strategy="hierarchical",
+            backend_name=backend_name,
+            model_name=model_name,
+            judge_role="primary",
+            input_view_type="hierarchical-synthesis",
+            preparation_path="hierarchical-synthesis",
+            scores=synthesis_scores,
+        ),
     )
 
     return ExperimentScores(
@@ -1247,7 +1398,9 @@ async def _judge_experiment_hierarchical(
         scores=synthesis_scores,
         judge_backend=backend_name,
         judge_model=model_name,
+        judge_role="primary",
         strategy="hierarchical",
+        preparation_path="hierarchical-synthesis",
         input_view_type="hierarchical-synthesis",
         input_preparation={
             "used_digest": used_digest,
