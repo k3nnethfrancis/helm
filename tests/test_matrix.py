@@ -37,6 +37,122 @@ def test_generate_matrix_patterns_wave0(tmp_path: Path) -> None:
         assert config.metadata.matrix.architecture_family == condition["architecture_family"]
 
 
+def test_generate_matrix_patterns_supports_replications_and_turn_limits(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "rl_readiness.yaml"
+    manifest_path.write_text(
+        """
+matrix_id: rl_readiness
+description: RL-readiness targeted slice
+output_root: patterns/generated/rl_readiness
+
+defaults:
+  harness: claude-code
+  model: claude-opus-4-6
+  prompt_family: swebench_claude_matrix_v1
+  dimensions:
+    - escalation-calibration
+    - goal-drift
+    - failure-suppression
+    - context-degradation
+    - resource-waste
+    - human-model-accuracy
+  judge_backend: claude-headless
+  benchmark:
+    adapter: swebench
+    id: princeton-nlp/SWE-bench_Verified
+    dataset_path: data/swe_bench_verified.jsonl
+    verifier:
+      mode: command
+      command: python scripts/verify_swebench.py --instance-id {example_id}
+  single_limits:
+    max_duration: 30m
+    max_turns_per_agent: 40
+    max_budget_usd: 15.0
+  multi_agent_limits:
+    max_duration: 45m
+    max_turns_per_agent: 60
+    max_budget_usd: 25.0
+
+task_packs:
+  decomposable_cross_module:
+    task_structure: decomposable_cross_module
+    rationale: anchor
+    primary_examples:
+      - example_id: sympy__sympy-17630
+        rationale: anchor
+
+waves:
+  targeted:
+    families: [centralized]
+    sizes: [5]
+    pack_examples:
+      decomposable_cross_module: 1
+    replications: 2
+    turn_limits: [60, 120]
+    notes: targeted replication + ablation
+"""
+    )
+
+    generated = generate_matrix_patterns(
+        manifest_path,
+        output_root=tmp_path / "generated",
+        wave="targeted",
+    )
+
+    conditions = generated["conditions"]
+    assert len(conditions) == 4
+
+    condition_ids = {condition["condition_id"] for condition in conditions}
+    assert "targeted-centralized-5-decomposable_cross_module-1-t60-r1" in condition_ids
+    assert "targeted-centralized-5-decomposable_cross_module-1-t60-r2" in condition_ids
+    assert "targeted-centralized-5-decomposable_cross_module-1-t120-r1" in condition_ids
+    assert "targeted-centralized-5-decomposable_cross_module-1-t120-r2" in condition_ids
+
+    first = Path(str(conditions[0]["pattern_path"]))
+    config = ExperimentConfig.from_yaml(first)
+    assert config.metadata.matrix is not None
+    assert config.metadata.matrix.base_condition_id == "targeted-centralized-5-decomposable_cross_module-1"
+    assert config.metadata.matrix.replication_count == 2
+    assert config.metadata.matrix.replication_index in (1, 2)
+    assert config.metadata.matrix.turn_limit_variant in (60, 120)
+    assert config.limits.max_turns_per_agent in (60, 120)
+
+
+def test_generate_rl_readiness_manifest_waves(tmp_path: Path) -> None:
+    manifest = (
+        Path(__file__).resolve().parents[1]
+        / "configs"
+        / "matrices"
+        / "swebench_rl_readiness_phase1.yaml"
+    )
+
+    broader = generate_matrix_patterns(
+        manifest,
+        output_root=tmp_path / "broader",
+        wave="broader_panel",
+    )
+    replicated = generate_matrix_patterns(
+        manifest,
+        output_root=tmp_path / "replicated",
+        wave="replicated_decision_slice",
+    )
+    ablation = generate_matrix_patterns(
+        manifest,
+        output_root=tmp_path / "ablation",
+        wave="turn_budget_ablation",
+    )
+
+    assert len(broader["conditions"]) == 6
+    assert len(replicated["conditions"]) == 12
+    assert len(ablation["conditions"]) == 6
+
+    ablation_config = ExperimentConfig.from_yaml(Path(str(ablation["conditions"][0]["pattern_path"])))
+    assert ablation_config.metadata.matrix is not None
+    assert ablation_config.metadata.matrix.turn_limit_variant in (60, 120, 180)
+    assert ablation_config.metadata.matrix.replication_count == 2
+    assert ablation_config.limits.max_turns_per_agent in (60, 120, 180)
+
+
 def test_record_condition_execution_preserves_pending_conditions() -> None:
     payload = {
         "matrix_id": "phase1",
@@ -101,6 +217,7 @@ def test_analyze_matrix_summaries_groups_and_surfaces_flat_behavior(tmp_path: Pa
                             "failure-suppression": {"category": "transparent"},
                             "context-degradation": {"category": "preserved"},
                             "resource-waste": {"category": "efficient"},
+                            "human-model-accuracy": {"category": "accurate"},
                         }
                     },
                 },
@@ -142,6 +259,7 @@ def test_analyze_matrix_summaries_groups_and_surfaces_flat_behavior(tmp_path: Pa
                             "failure-suppression": {"category": "mostly-transparent"},
                             "context-degradation": {"category": "minor-degradation"},
                             "resource-waste": {"category": "significant-waste"},
+                            "human-model-accuracy": {"category": "minor-gaps"},
                         }
                     },
                 },
@@ -233,6 +351,7 @@ def test_analyze_matrix_summaries_falls_back_to_summary_judge_scores(tmp_path: P
                             "failure-suppression": {"category": "transparent"},
                             "context-degradation": {"category": "preserved"},
                             "resource-waste": {"category": "efficient"},
+                            "human-model-accuracy": {"category": "accurate"},
                         },
                     }
                 ],
@@ -259,6 +378,7 @@ def test_analyze_matrix_summaries_falls_back_to_summary_judge_scores(tmp_path: P
                             "failure-suppression": {"category": "mostly-transparent"},
                             "context-degradation": {"category": "minor-degradation"},
                             "resource-waste": {"category": "significant-waste"},
+                            "human-model-accuracy": {"category": "minor-gaps"},
                         },
                         "matrix": {
                             "matrix_id": "phase1",

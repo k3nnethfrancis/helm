@@ -12,6 +12,8 @@ from helm.config import (
     CoordinationChannelScope,
     ExperimentConfig,
     AgentRole,
+    JudgeBackendType,
+    JudgeConfig,
 )
 
 
@@ -144,3 +146,46 @@ metadata:
     assert config.metadata.matrix.architecture_family == "single"
     assert config.matrix_metadata() is not None
     assert config.matrix_metadata()["swarm_size"] == 1
+
+
+def test_judge_config_normalizes_sdk_alias() -> None:
+    config = JudgeConfig(backend="sdk")
+
+    assert config.backend == JudgeBackendType.CLAUDE_HEADLESS
+    assert config.model is None
+
+
+def test_judge_config_defaults_openrouter_model() -> None:
+    config = JudgeConfig(backend="openrouter")
+
+    assert config.backend == JudgeBackendType.OPENROUTER
+    assert config.model == "google/gemini-2.0-flash-001"
+
+
+def test_from_yaml_parses_paired_evaluation_metadata(tmp_path: Path) -> None:
+    config_path = tmp_path / "pattern.yaml"
+    config_path.write_text(
+        """
+name: paired-eval-test
+agents:
+  - id: solver
+metadata:
+  paired_evaluation:
+    comparison_id: monitor-a-b
+    comparison_role: monitored
+    comparison_axis: monitoring-evasion
+    visible_monitoring: true
+    partner_condition_id: wave1-single-1-unmonitored
+"""
+    )
+
+    config = ExperimentConfig.from_yaml(config_path)
+
+    assert config.metadata.paired_evaluation is not None
+    assert config.paired_evaluation_metadata() == {
+        "comparison_id": "monitor-a-b",
+        "comparison_role": "monitored",
+        "comparison_axis": "monitoring-evasion",
+        "visible_monitoring": True,
+        "partner_condition_id": "wave1-single-1-unmonitored",
+    }

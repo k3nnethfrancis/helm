@@ -34,16 +34,21 @@ ACTIVE_DIMENSIONS = [
     "failure-suppression",
     "context-degradation",
     "resource-waste",
+    "human-model-accuracy",
 ]
 MATRIX_METADATA_FIELDS = [
     "matrix_id",
     "condition_id",
+    "base_condition_id",
     "architecture_family",
     "swarm_size",
     "task_pack",
     "task_structure",
     "prompt_family",
     "coordination_family",
+    "replication_index",
+    "replication_count",
+    "turn_limit_variant",
 ]
 
 class MatrixExampleSpec(BaseModel):
@@ -63,7 +68,7 @@ class MatrixDefaults(BaseModel):
     model: str | None = None
     prompt_family: str
     dimensions: list[str] = Field(default_factory=lambda: ACTIVE_DIMENSIONS.copy())
-    judge_backend: str = "sdk"
+    judge_backend: str = "claude-headless"
     judge_model: str | None = None
     benchmark: dict[str, Any]
     single_limits: dict[str, Any] = Field(default_factory=dict)
@@ -78,6 +83,8 @@ class MatrixWave(BaseModel):
     anchor_pack: str | None = None
     anchor_example_id: str | None = None
     pack_examples: dict[str, int | str] = Field(default_factory=dict)
+    replications: int = 1
+    turn_limits: list[int] = Field(default_factory=list)
     notes: str | None = None
 
 
@@ -109,6 +116,7 @@ class MatrixManifest(BaseModel):
 class GeneratedCondition:
     wave: str
     condition_id: str
+    base_condition_id: str
     architecture_family: str
     swarm_size: int
     task_pack: str
@@ -117,6 +125,9 @@ class GeneratedCondition:
     prompt_family: str
     coordination_family: str
     runtime_pattern: str
+    replication_index: int
+    replication_count: int
+    turn_limit_variant: int | None
     name: str
     description: str
     pattern_path: Path
@@ -125,12 +136,16 @@ class GeneratedCondition:
         return {
             "matrix_id": matrix_id,
             "condition_id": self.condition_id,
+            "base_condition_id": self.base_condition_id,
             "architecture_family": self.architecture_family,
             "swarm_size": self.swarm_size,
             "task_pack": self.task_pack,
             "task_structure": self.task_structure,
             "prompt_family": self.prompt_family,
             "coordination_family": self.coordination_family,
+            "replication_index": self.replication_index,
+            "replication_count": self.replication_count,
+            "turn_limit_variant": self.turn_limit_variant,
         }
 
 
@@ -262,9 +277,22 @@ def _build_condition(
     example_ids: list[str],
     selection_label: str,
     output_root: Path,
+    replication_index: int = 1,
+    replication_count: int = 1,
+    turn_limit_variant: int | None = None,
 ) -> GeneratedCondition:
-    condition_id = f"{wave_name}-{family}-{size}-{task_pack}-{selection_label}"
+    base_condition_id = f"{wave_name}-{family}-{size}-{task_pack}-{selection_label}"
+    condition_id = base_condition_id
+    if turn_limit_variant is not None:
+        condition_id = f"{condition_id}-t{turn_limit_variant}"
+    if replication_count > 1:
+        condition_id = f"{condition_id}-r{replication_index}"
+
     name = _condition_name(manifest.matrix_id, wave_name, family, size, task_pack)
+    if turn_limit_variant is not None:
+        name = f"{name}-t{turn_limit_variant}"
+    if replication_count > 1:
+        name = f"{name}-r{replication_index}"
     description = _condition_description(
         family=family,
         size=size,
@@ -272,10 +300,15 @@ def _build_condition(
         task_structure=task_structure,
         example_ids=example_ids,
     )
+    if turn_limit_variant is not None:
+        description += f", turn limit {turn_limit_variant}"
+    if replication_count > 1:
+        description += f", replication {replication_index}/{replication_count}"
     pattern_path = output_root / f"{name}.yaml"
     return GeneratedCondition(
         wave=wave_name,
         condition_id=condition_id,
+        base_condition_id=base_condition_id,
         architecture_family=family,
         swarm_size=size,
         task_pack=task_pack,
@@ -284,6 +317,9 @@ def _build_condition(
         prompt_family=manifest.defaults.prompt_family,
         coordination_family=COORDINATION_FAMILY_LABELS[family],
         runtime_pattern=pattern_runtime_label(family),
+        replication_index=replication_index,
+        replication_count=replication_count,
+        turn_limit_variant=turn_limit_variant,
         name=name,
         description=description,
         pattern_path=pattern_path,
@@ -305,6 +341,10 @@ def _render_condition_payload(
         family=condition.architecture_family,
         size=condition.swarm_size,
     )
+    limits = _build_limits(manifest.defaults, condition.swarm_size)
+    if condition.turn_limit_variant is not None:
+        limits["max_turns_per_agent"] = condition.turn_limit_variant
+
     payload = {
         "name": condition.name,
         "description": condition.description,
@@ -313,7 +353,7 @@ def _render_condition_payload(
         "coordination": build_coordination(condition.architecture_family),
         "benchmark": _build_benchmark(manifest.defaults, condition.example_ids),
         "evaluation": _build_evaluation(manifest.defaults),
-        "limits": _build_limits(manifest.defaults, condition.swarm_size),
+        "limits": limits,
         "metadata": {
             "created": date.today().isoformat(),
             "version": 1,
@@ -350,19 +390,25 @@ def generate_matrix_patterns(
                 if size not in SUPPORTED_FAMILY_SIZES[family]:
                     continue
                 for task_pack, task_structure, example_ids, selection_label in pack_entries:
-                    conditions.append(
-                        _build_condition(
-                            manifest=manifest,
-                            wave_name=wave_name,
-                            family=family,
-                            size=size,
-                            task_pack=task_pack,
-                            task_structure=task_structure,
-                            example_ids=example_ids,
-                            selection_label=selection_label,
-                            output_root=resolved_output_root,
-                        )
-                    )
+                    turn_limit_variants = wave_config.turn_limits or [None]
+                    for turn_limit_variant in turn_limit_variants:
+                        for replication_index in range(1, wave_config.replications + 1):
+                            conditions.append(
+                                _build_condition(
+                                    manifest=manifest,
+                                    wave_name=wave_name,
+                                    family=family,
+                                    size=size,
+                                    task_pack=task_pack,
+                                    task_structure=task_structure,
+                                    example_ids=example_ids,
+                                    selection_label=selection_label,
+                                    output_root=resolved_output_root,
+                                    replication_index=replication_index,
+                                    replication_count=wave_config.replications,
+                                    turn_limit_variant=turn_limit_variant,
+                                )
+                            )
 
     written_conditions: list[dict[str, Any]] = []
     for condition in conditions:
