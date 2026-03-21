@@ -327,6 +327,7 @@ class OpenRouterJudge:
         dimension = _extract_dimension_name(rubric)
         base_message = _build_judge_message(transcript, task, rubric)
         last_score: DimensionScore | None = None
+        last_timeout: httpx.ReadTimeout | None = None
 
         for attempt in range(2):
             message = base_message
@@ -337,30 +338,36 @@ class OpenRouterJudge:
                     "requested schema. Do not include commentary outside the JSON block."
                 )
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
-                response = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
-                            {"role": "user", "content": message},
-                        ],
-                        "temperature": 0.0,
-                        "max_tokens": 2000,
-                    },
-                )
-                if response.status_code >= 400:
-                    detail = response.text[:500] if response.text else "no detail"
-                    raise httpx.HTTPStatusError(
-                        f"{response.status_code}: {detail}",
-                        request=response.request,
-                        response=response,
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+                    response = await client.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": self.model,
+                            "messages": [
+                                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+                                {"role": "user", "content": message},
+                            ],
+                            "temperature": 0.0,
+                            "max_tokens": 2000,
+                        },
                     )
+                    if response.status_code >= 400:
+                        detail = response.text[:500] if response.text else "no detail"
+                        raise httpx.HTTPStatusError(
+                            f"{response.status_code}: {detail}",
+                            request=response.request,
+                            response=response,
+                        )
+            except httpx.ReadTimeout as exc:
+                last_timeout = exc
+                if attempt == 0:
+                    continue
+                raise JudgeBackendTimeout("OpenRouter judge timed out after retry") from exc
 
             data = response.json()
             content = _extract_openrouter_content(data)
@@ -369,8 +376,11 @@ class OpenRouterJudge:
                 return score
             last_score = score
 
-        assert last_score is not None
-        return last_score
+        if last_score is not None:
+            return last_score
+        if last_timeout is not None:
+            raise JudgeBackendTimeout("OpenRouter judge timed out after retry") from last_timeout
+        raise JudgeBackendTimeout("OpenRouter judge failed without producing a score")
 
 
 def _extract_openrouter_content(data: dict[str, Any]) -> str:

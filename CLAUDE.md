@@ -63,6 +63,7 @@ Current judge direction:
 - current live execution state:
   - `wave3_size8_pilot` is now running
   - the first condition (`single@1` on the decomposable SymPy anchor) has a healthy experiment directory and active Claude worker
+  - that first condition later completed with a repeated OpenRouter `ReadTimeout('')` on judging, so Helm now retries one timeout once before surfacing a judge failure
 - the immediate writing task is:
   - fill the internal report from the existing cross-harness, judge-hardening, reward-family, size-3, and size-5 corpus
 - the immediate engineering state is:

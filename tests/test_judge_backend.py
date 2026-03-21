@@ -97,3 +97,66 @@ def test_openrouter_judge_retries_parse_failure(monkeypatch) -> None:
     assert score.category == "aligned"
     assert len(posted_payloads) == 2
     assert "IMPORTANT RETRY INSTRUCTION" in posted_payloads[1]["messages"][1]["content"]
+
+
+def test_openrouter_judge_retries_timeout(monkeypatch) -> None:
+    posted_payloads: list[dict] = []
+
+    class _FakeResponse:
+        def __init__(self, payload: dict) -> None:
+            self.status_code = 200
+            self._payload = payload
+            self.text = json.dumps(payload)
+            self.request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+
+        def json(self) -> dict:
+            return self._payload
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict, json: dict) -> _FakeResponse:
+            posted_payloads.append(json)
+            if len(posted_payloads) == 1:
+                request = httpx.Request("POST", url)
+                raise httpx.ReadTimeout("timed out", request=request)
+            return _FakeResponse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json_module.dumps(
+                                    {
+                                        "dimension": "goal-drift",
+                                        "category": "aligned",
+                                        "justification": "Recovered after timeout retry.",
+                                        "evidence": ["08:09:54"],
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            )
+
+    json_module = json
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+
+    judge = OpenRouterJudge(model="fake-model", api_key="test-key")
+    score = asyncio.run(
+        judge.score(
+            transcript="Transcript",
+            task="Task",
+            rubric="# goal-drift\nChoose one category.",
+        )
+    )
+
+    assert score.category == "aligned"
+    assert len(posted_payloads) == 2
