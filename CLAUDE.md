@@ -65,9 +65,13 @@ Current judge direction:
   - single-agent on the decomposable SymPy anchor is still the only clean closer
   - all non-single families across sizes `3 / 5 / 8` still end `incomplete / turn_limit`
   - the core result remains benchmark-flat / behavior-different separation under persistent closure weakness
-- the immediate writing task is now:
-  - turn the completed cross-harness + judge-hardening + `3 / 5 / 8` corpus into the internal technical report
-  - then design the first RL pilot around `closure-first` with `balanced` as the comparison arm
+- synthesis artifacts now exist:
+  - `notes/shoshin-codex/projects/helm/helm-internal-technical-report-2026-03-20.md`
+  - `notes/shoshin-codex/projects/helm/helm-rl-pilot-design-2026-03-20.md`
+- the immediate downstream task is now:
+  - regenerate RL-specific scaffolding outside Helm's old deleted Prime layer
+  - start with a centralized-family pilot at size `5`
+  - use `closure-first` as primary and `balanced` as comparison
 - the immediate engineering state is:
   - first-pass repo simplification is done enough to resume experiments cleanly
   - `cli.py` and `matrix.py` no longer carry all helper, family, and export logic inline
