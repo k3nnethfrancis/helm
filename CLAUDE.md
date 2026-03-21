@@ -23,7 +23,7 @@ This breaks down into:
 
 ## Current Priority
 
-The current priority is **post-hardening baseline expansion before RL**, from a simplified repo shape that is ready for broader benchmark work again.
+The current priority is **RL-readiness evidence hardening**, not immediate RL handoff.
 
 Helm now has enough benchmark and reward-validation evidence to stop treating "can we run a basic cross-harness SWE-bench corpus?" as the main open question:
 - Claude and Codex both have validated SymPy baselines
@@ -32,10 +32,11 @@ Helm now has enough benchmark and reward-validation evidence to stop treating "c
 - `closure-first` currently looks like the right first reward family, with `balanced` as the comparison arm
 
 That means the next sequence should be:
-- use the internal technical report and judge-hardening note as the current summary anchors
-- treat the hierarchical judge as validated enough for the next baseline phase
-- run broader `3 / 5 / 8` benchmark baselines on SWE-bench before any RL handoff
-- move to the first Prime RL pilot only after the judge path is trustworthy enough for larger-scale benchmark comparisons
+- use the internal technical report and judge-hardening note as summary anchors, not as permission to start RL immediately
+- treat the completed `3 / 5 / 8` size ladder as a successful broadened pilot, not as sufficient final evidence for training
+- harden the judge path against single-model dependence before using judged dimensions as reward signals
+- expand beyond the current two-task, mostly `n=1` baseline corpus before training conclusions are treated as validated
+- move to the first RL pilot only after the next evidence-hardening phase is complete
 
 Judge hardening should focus on:
 - whether the judge sees the right context from multi-agent transcripts and coordination artifacts
@@ -48,6 +49,13 @@ Current judge direction:
 - the multi-view hierarchical judge is now implemented as the mainline path in `helm judge`
 - legacy single-pass judging still exists as explicit audit mode via `--strategy single`
 - the deterministic long-run digest remains an internal preparation mechanism where needed, not the product direction
+- the current operational judge backends are still not sufficient for RL-grade confidence:
+  - `openrouter` has been useful for throughput, but should not remain the primary evidentiary judge path
+  - `sdk` is currently Claude Code headless only
+  - the next judge phase should add Codex headless judging and treat cross-harness counterparty judging as the main validation path
+- the dimension ontology remains `7`, but the currently implemented scored battery is still `5`
+  - `human-model-accuracy` should become an active judged dimension
+  - `monitoring-evasion` should be implemented as a paired-run evaluator rather than forced into the default per-run rubric loop
 - the immediate next experimental step is the post-hardening size ladder:
   - `wave1_size3_pilot` is complete and interpretable
   - `wave2_size5_pilot` is complete and clean after a one-off rejudge on a single OpenRouter timeout
@@ -68,10 +76,16 @@ Current judge direction:
 - synthesis artifacts now exist:
   - `notes/shoshin-codex/projects/helm/helm-internal-technical-report-2026-03-20.md`
   - `notes/shoshin-codex/projects/helm/helm-rl-pilot-design-2026-03-20.md`
-- the immediate downstream task is now:
-  - regenerate RL-specific scaffolding outside Helm's old deleted Prime layer
-  - start with a centralized-family pilot at size `5`
-  - use `closure-first` as primary and `balanced` as comparison
+- the immediate downstream task is now an RL-readiness hardening phase:
+  - add cross-harness headless judge validation
+  - implement `human-model-accuracy`
+  - design real paired-run `monitoring-evasion`
+  - run turn-budget ablations on closure-sensitive conditions
+  - run a broader task panel with targeted replication before training
+- the RL pilot recommendation remains provisional:
+  - centralized-family pilot at size `5`
+  - `closure-first` as primary and `balanced` as comparison
+  - only after the evidence-hardening phase still supports that read
 - the immediate engineering state is:
   - first-pass repo simplification is done enough to resume experiments cleanly
   - `cli.py` and `matrix.py` no longer carry all helper, family, and export logic inline

@@ -2,8 +2,8 @@
 
 **Research question**: Are Helm's current behavioral dimensions robust enough to join benchmark performance as training signals for orchestrators and swarms?
 
-**Status**: Active
-**Updated**: 2026-03-14
+**Status**: Historical reward-validation plan; still useful as background
+**Updated**: 2026-03-21
 
 ---
 
@@ -26,7 +26,33 @@ The current judged dimensions are:
 - `escalation-calibration`
 - `resource-waste`
 
-`monitoring-evasion` and `human-model-accuracy` remain future dimensions because they require dedicated experimental designs that are not yet implemented.
+`monitoring-evasion` and `human-model-accuracy` are still not active in the measured battery. That is now a concrete follow-up problem, not just a note:
+- `human-model-accuracy` should be added to the active judged battery
+- `monitoring-evasion` should be implemented via paired monitored/unmonitored conditions rather than a default per-run rubric
+
+## Current Phase Update (2026-03-21)
+
+This plan succeeded at its original purpose:
+- the reward-validation battery completed
+- judge hardening completed enough for broader baseline work
+- the post-hardening `3 / 5 / 8` family/size ladder completed
+- Helm now has a defensible first RL recommendation on paper
+
+But the current read is that **RL should still wait one more phase**.
+
+The review of the completed corpus surfaced four issues that should be treated as real gates, not just limitations text:
+- judge-model dependence is still too high
+- the current broadened corpus is still mostly `n=1` per condition
+- two SWE-bench tasks carry too much of the evidence
+- the turn-limit confound is still open
+
+So the next active phase is:
+- cross-judge validation
+- dimension completion (`human-model-accuracy` now, `monitoring-evasion` as paired-run design)
+- turn-budget ablation
+- broader task panel with targeted replication
+
+This document remains the historical record of the reward-validation phase. The next-phase operating context should live in `CLAUDE.md`, `tasks.md`, the progress ledger, and the research log.
 
 ---
 
