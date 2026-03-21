@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import time
 import uuid
@@ -18,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 from helm.benchmarks import get_adapter
 from helm.benchmarks.swebench_workspace import canonical_workspace_repo, stage_repo_in_workspace
@@ -656,11 +659,16 @@ Your peers:
 
         if self._sdk:
             # Terminate all sessions
-            for session_id in self._agent_sessions.values():
+            for agent_id, session_id in self._agent_sessions.items():
                 try:
                     await self._sdk.terminate_session(session_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        "Session termination failed for agent %s (session %s): %s",
+                        agent_id,
+                        session_id,
+                        e,
+                    )
 
             await self._sdk.dispose()
 
@@ -955,4 +963,7 @@ async def run_experiment_with_config(
         result = await experiment.run(task)
         return result
     finally:
-        await experiment.teardown()
+        try:
+            await experiment.teardown()
+        except Exception as e:
+            logger.warning("Experiment teardown failed: %s", e)

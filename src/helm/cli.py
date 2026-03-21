@@ -335,6 +335,13 @@ def run_benchmark_examples(
             help="Judge each benchmark run on the active behavioral dimensions after verification",
         ),
     ] = True,
+    fail_on_judge_error: Annotated[
+        bool,
+        typer.Option(
+            "--fail-on-judge-error",
+            help="Treat judge failures as benchmark failures (exit non-zero)",
+        ),
+    ] = False,
 ) -> None:
     """Run a sampled set of benchmark examples from a benchmark-enabled pattern."""
     default_sdk, default_experiments = get_default_paths()
@@ -417,6 +424,7 @@ def run_benchmark_examples(
         judge_scores = None
         judge_scores_path = None
         judge_error = None
+        judge_error_detail = None
         if entry.config.benchmark is not None:
             verification = verify_benchmark_run(
                 benchmark=entry.config.benchmark,
@@ -466,7 +474,10 @@ def run_benchmark_examples(
                 )
                 typer.echo(f"  Judge artifact: {judge_scores_path}")
             except Exception as e:
+                import traceback
+
                 judge_error = _format_exception_message(e)
+                judge_error_detail = traceback.format_exc()
                 typer.echo(f"  Warning: behavioral judging failed: {judge_error}")
 
         typer.echo()
@@ -497,6 +508,7 @@ def run_benchmark_examples(
                     str(judge_scores_path) if judge_scores_path is not None else None
                 ),
                 "judge_error": judge_error,
+                "judge_error_detail": judge_error_detail,
             }
         )
 
@@ -508,10 +520,14 @@ def run_benchmark_examples(
     succeeded = sum(1 for item in results_summary if item["success"])
     failed = completed - succeeded
 
+    judge_failures = sum(1 for item in results_summary if item.get("judge_error"))
+
     typer.echo("Benchmark sample summary:")
     typer.echo(f"  Completed: {completed}")
     typer.echo(f"  Succeeded: {succeeded}")
     typer.echo(f"  Failed: {failed}")
+    if judge_after:
+        typer.echo(f"  Judge failures: {judge_failures}/{completed}")
 
     summaries_dir = exp_dir / "benchmark-runs"
     summaries_dir.mkdir(parents=True, exist_ok=True)
@@ -539,6 +555,9 @@ def run_benchmark_examples(
     with open(summary_path, "w") as f:
         json.dump(summary_payload, f, indent=2)
     typer.echo(f"  Summary JSON: {summary_path}")
+
+    if fail_on_judge_error and judge_failures > 0:
+        raise typer.Exit(1)
 
 
 @benchmark_app.command("report")

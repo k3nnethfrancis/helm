@@ -507,72 +507,108 @@ class CodexHeadlessJudge:
         self.timeout_seconds = timeout_seconds
 
     async def score(self, transcript: str, task: str, rubric: str) -> DimensionScore:
-        """Score a transcript via Codex headless execution."""
+        """Score a transcript via Codex headless execution.
+
+        Retries once on empty/malformed response with an explicit JSON
+        instruction, matching the OpenRouter retry pattern.
+        """
         dimension = _extract_dimension_name(rubric)
         message = _build_judge_message(transcript, task, rubric)
-        full_prompt = f"{JUDGE_SYSTEM_PROMPT}\n\n---\n\n{message}"
 
         import subprocess
 
-        with tempfile.TemporaryDirectory(prefix="helm-codex-judge-") as tmpdir:
-            output_path = Path(tmpdir) / "last_message.txt"
-            cmd = [
-                "codex",
-                "exec",
-                "--skip-git-repo-check",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--output-last-message",
-                str(output_path),
-                "-c",
-                'model_reasoning_effort="high"',
-            ]
-            if self.model:
-                cmd.extend(["--model", self.model])
-            cmd.extend(["-C", tmpdir, full_prompt])
-
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=_headless_judge_env(),
+        last_parse_result: DimensionScore | None = None
+        for attempt in range(2):
+            if attempt == 0:
+                full_prompt = f"{JUDGE_SYSTEM_PROMPT}\n\n---\n\n{message}"
+            else:
+                full_prompt = (
+                    f"{JUDGE_SYSTEM_PROMPT}\n\n---\n\n{message}"
+                    "\n\nIMPORTANT: Return ONLY valid JSON matching the "
+                    "requested schema. No prose, no markdown fences."
                 )
-                try:
-                    stdout, stderr = await asyncio.wait_for(
-                        proc.communicate(),
-                        timeout=self.timeout_seconds,
-                    )
-                except asyncio.TimeoutError as exc:
-                    proc.kill()
-                    await proc.communicate()
-                    raise JudgeBackendTimeout(
-                        f"Codex CLI judge timed out after {self.timeout_seconds:.0f}s"
-                    ) from exc
 
-                if proc.returncode != 0:
+            with tempfile.TemporaryDirectory(prefix="helm-codex-judge-") as tmpdir:
+                output_path = Path(tmpdir) / "last_message.txt"
+                cmd = [
+                    "codex",
+                    "exec",
+                    "--skip-git-repo-check",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "--output-last-message",
+                    str(output_path),
+                    "-c",
+                    'model_reasoning_effort="high"',
+                ]
+                if self.model:
+                    cmd.extend(["--model", self.model])
+                cmd.extend(["-C", tmpdir, full_prompt])
+
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=_headless_judge_env(),
+                    )
+                    try:
+                        stdout, stderr = await asyncio.wait_for(
+                            proc.communicate(),
+                            timeout=self.timeout_seconds,
+                        )
+                    except asyncio.TimeoutError as exc:
+                        proc.kill()
+                        await proc.communicate()
+                        raise JudgeBackendTimeout(
+                            f"Codex CLI judge timed out after {self.timeout_seconds:.0f}s"
+                        ) from exc
+
+                    if proc.returncode != 0:
+                        last_parse_result = DimensionScore(
+                            dimension=dimension,
+                            category="unknown",
+                            severity="moderate",
+                            justification=(
+                                f"Codex headless judge failed (attempt {attempt + 1}): "
+                                f"{stderr.decode()[:200]}"
+                            ),
+                        )
+                        if attempt == 0:
+                            continue
+                        return last_parse_result
+
+                    raw_text = ""
+                    if output_path.exists():
+                        raw_text = output_path.read_text()
+                    else:
+                        raw_text = stdout.decode()
+
+                    result = _parse_judge_response(raw_text, dimension)
+
+                    # If parse failed (unknown category), retry once
+                    if result.category == "unknown" and attempt == 0:
+                        last_parse_result = result
+                        continue
+                    return result
+
+                except FileNotFoundError:
                     return DimensionScore(
                         dimension=dimension,
                         category="unknown",
                         severity="moderate",
                         justification=(
-                            f"Codex headless judge failed: {stderr.decode()[:200]}"
+                            "Codex CLI not found. Install Codex to use the "
+                            "codex-headless backend."
                         ),
                     )
 
-                if output_path.exists():
-                    return _parse_judge_response(output_path.read_text(), dimension)
-                return _parse_judge_response(stdout.decode(), dimension)
-
-            except FileNotFoundError:
-                return DimensionScore(
-                    dimension=dimension,
-                    category="unknown",
-                    severity="moderate",
-                    justification=(
-                        "Codex CLI not found. Install Codex to use the "
-                        "codex-headless backend."
-                    ),
-                )
+        # Should not reach here, but return last result if it does
+        return last_parse_result or DimensionScore(
+            dimension=dimension,
+            category="unknown",
+            severity="moderate",
+            justification="Codex headless judge failed after 2 attempts",
+        )
 
 
 def _headless_judge_env() -> dict[str, str]:
