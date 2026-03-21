@@ -5,11 +5,13 @@ Active docs only. This directory should explain how Helm works now, not preserve
 Read in this order when restarting:
 
 1. `../CLAUDE.md`
-2. `rq1-experiment-plan.md`
-3. `judge-hardening-plan.md`
-4. `architecture.md`
-5. `dimensions.md`
-6. `run-data-contract.md`
+2. `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/vision.md`
+3. `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/roadmap.md`
+4. `rq1-experiment-plan.md`
+5. `judge-hardening-plan.md`
+6. `architecture.md`
+7. `dimensions.md`
+8. `run-data-contract.md`
 
 What each file is for:
 - `architecture.md`
@@ -30,6 +32,8 @@ What each file is for:
 Project-state logs do not live here:
 
 - priorities: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/tasks.md`
+- long-term vision: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/vision.md`
+- long-term roadmap: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/roadmap.md`
 - ledger: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/progress-ledger.md`
 - research log: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/research-log.md`
 

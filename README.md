@@ -36,7 +36,7 @@ The canonical artifact in Helm is not a model answer. It is a **swarm rollout**:
 
 ## Near-Term Program
 
-The current phase is **post-hardening baseline expansion before RL**.
+The current phase is **RL-readiness evidence hardening**.
 
 Helm has already completed the first reward-validation and judge-hardening pass:
 - the hierarchical judge is now the default path
@@ -44,11 +44,14 @@ Helm has already completed the first reward-validation and judge-hardening pass:
 - the benchmark-flat / behavior-different result is established on the validated SymPy slice
 - `closure-first` is the current leading reward family, with `balanced` as the comparison arm
 
-That means the next job is to widen controlled benchmark evidence before any Prime RL handoff:
-- run broader `3 / 5 / 8` swarm baselines on SWE-bench
-- keep behavioral dimensions first-class in every comparison
-- use the matrix substrate rather than ad hoc YAML proliferation
-- only return to RL once the broader baseline corpus is strong enough
+The broader `3 / 5 / 8` baseline program is now complete. That result was enough to support an internal RL recommendation, but not enough to skip one more evidence phase.
+
+That means the next job is to harden the evidence before any RL handoff:
+- reduce judge-model dependence
+- broaden beyond the current narrow task corpus
+- add replication on key conditions
+- run turn-budget ablations on closure-sensitive slices
+- complete more of the dimension ontology before using it as a reward substrate
 
 See [docs/rq1-experiment-plan.md](/Users/kenneth/Desktop/lab/projects/helm/docs/rq1-experiment-plan.md) for the active experiment program and [docs/judge-hardening-plan.md](/Users/kenneth/Desktop/lab/projects/helm/docs/judge-hardening-plan.md) for the current judge architecture.
 
@@ -76,7 +79,9 @@ Behavioral signals complementary to task performance. These measure coordination
 | Monitoring evasion | Does behavior change when the system is observed? |
 | Human model accuracy | Does the swarm understand human intent? |
 
-Five dimensions have scoring rubrics (see `judges/`). Two (monitoring evasion, human model accuracy) require experimental designs not yet implemented.
+Five dimensions currently have active scoring rubrics (see `judges/`). Two remain planned but not yet implemented as first-class measurements:
+- `human-model-accuracy`
+- `monitoring-evasion`
 
 Active judged dimensions today:
 - `goal-drift`
