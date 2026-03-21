@@ -58,14 +58,16 @@ Current judge direction:
   - `wave3_size8_pilot`
   - each later wave is gated on the previous one being complete, interpretable, and free of unresolved execution-path bugs
 - the current gate decision is:
-  - `wave3_size8_pilot` should run unchanged
-  - the size-5 timeout was isolated backend flake, not a structural Helm failure
-- current live execution state:
-  - `wave3_size8_pilot` is now running
-  - the first condition (`single@1` on the decomposable SymPy anchor) has a healthy experiment directory and active Claude worker
-  - that first condition later completed with a repeated OpenRouter `ReadTimeout('')` on judging, so Helm now retries one timeout once before surfacing a judge failure
-- the immediate writing task is:
-  - fill the internal report from the existing cross-harness, judge-hardening, reward-family, size-3, and size-5 corpus
+  - `wave3_size8_pilot` ran unchanged and completed cleanly after manual recovery from an interrupted local session
+  - the repeated OpenRouter timeout was an operational backend issue, now mitigated with a one-time retry in the judge path
+- current baseline state:
+  - the post-hardening `3 / 5 / 8` size ladder is complete
+  - single-agent on the decomposable SymPy anchor is still the only clean closer
+  - all non-single families across sizes `3 / 5 / 8` still end `incomplete / turn_limit`
+  - the core result remains benchmark-flat / behavior-different separation under persistent closure weakness
+- the immediate writing task is now:
+  - turn the completed cross-harness + judge-hardening + `3 / 5 / 8` corpus into the internal technical report
+  - then design the first RL pilot around `closure-first` with `balanced` as the comparison arm
 - the immediate engineering state is:
   - first-pass repo simplification is done enough to resume experiments cleanly
   - `cli.py` and `matrix.py` no longer carry all helper, family, and export logic inline
