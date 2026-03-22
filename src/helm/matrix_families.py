@@ -19,7 +19,34 @@ COORDINATION_FAMILY_LABELS = {
     "centralized": "centralized_hub_v1",
     "decentralized": "peer_network_v1",
     "hybrid": "hybrid_hub_lateral_review_v1",
+    "delegating": "delegating_hub_v1",
 }
+
+# Mechanical topology enforcement: tools blocked per (family, role).
+# These are enforced via --disallowedTools, not just prompt instructions.
+TOPOLOGY_RULES: dict[tuple[str, str], list[str]] = {
+    # Single: true single agent, no delegation or messaging
+    ("single", "solver"): ["Agent", "TeamCreate", "SendMessage"],
+    # Independent: isolated candidates, no cross-communication
+    ("independent", "candidate"): ["Agent", "TeamCreate", "SendMessage"],
+    ("independent", "selector"): ["Agent", "TeamCreate", "SendMessage"],
+    # Centralized: all coordination through filesystem, no native tools
+    ("centralized", "hub"): ["Agent", "TeamCreate", "SendMessage"],
+    ("centralized", "worker"): ["Agent", "TeamCreate", "SendMessage"],
+    # Decentralized: peer filesystem coordination, no delegation
+    ("decentralized", "peer"): ["Agent", "TeamCreate", "SendMessage"],
+    # Hybrid: hub + lateral filesystem channels, no native tools
+    ("hybrid", "hub"): ["Agent", "TeamCreate", "SendMessage"],
+    ("hybrid", "worker"): ["Agent", "TeamCreate", "SendMessage"],
+    # Delegating: hub CAN spawn via helm-agent CLI, workers cannot
+    ("delegating", "hub"): ["TeamCreate", "SendMessage"],  # Agent allowed
+    ("delegating", "worker"): ["Agent", "TeamCreate", "SendMessage"],
+}
+
+
+def get_disallowed_tools(family: str, role: str) -> list[str]:
+    """Return the list of tools mechanically blocked for a given family/role."""
+    return TOPOLOGY_RULES.get((family, role), ["Agent", "TeamCreate", "SendMessage"])
 
 
 @dataclass(frozen=True)
@@ -225,10 +252,62 @@ def _shared_benchmark_rules() -> str:
     )
 
 
+def build_tool_instructions(family: str, role: RoleSpec) -> str:
+    """Build prompt section explaining which tools are disabled and how to coordinate."""
+    runtime_role = role.runtime_role or "solver"
+    disallowed = get_disallowed_tools(family, runtime_role)
+
+    if not disallowed:
+        return ""
+
+    lines = [
+        "## Topology Enforcement",
+        "",
+        "The following tools are **mechanically disabled** in this experiment:",
+    ]
+    for tool in disallowed:
+        lines.append(f"- {tool}")
+    lines.append("")
+    lines.append("Attempts to use these tools will fail. This is not a suggestion — the tools are blocked at the CLI level.")
+    lines.append("")
+
+    if family == "single":
+        lines.append("You are a single agent. Solve the task on your own using Read, Write, Edit, Bash, Grep, and Glob.")
+    elif family in ("centralized", "decentralized", "hybrid"):
+        lines.extend([
+            "To coordinate with other agents, use the filesystem protocol:",
+            "  - Send messages: `python -m helm.agent_cli send --from {your_id} --to {recipient} --msg \"message\"`",
+            "  - Check inbox: `python -m helm.agent_cli inbox --agent {your_id}`",
+            "  - Check status: `python -m helm.agent_cli status --agent {agent_id}`",
+            "",
+            "All coordination goes through `coordination/` directories. Do not attempt to use Agent, TeamCreate, or SendMessage.",
+        ])
+    elif family == "delegating":
+        if "Agent" not in disallowed:
+            # This is the hub in delegating — can spawn
+            lines.extend([
+                "You may delegate subtasks to subagents:",
+                "  - Spawn: `python -m helm.agent_cli spawn --parent {your_id} --task \"subtask description\" --role worker`",
+                "  - Send messages: `python -m helm.agent_cli send --from {your_id} --to {recipient} --msg \"message\"`",
+                "  - Check inbox: `python -m helm.agent_cli inbox --agent {your_id}`",
+                "",
+                "Spawned subagents run independently and write results to `coordination/results/`.",
+                "You decide how to decompose the work — the system does not prescribe a decomposition strategy.",
+            ])
+        else:
+            lines.extend([
+                "You are a spawned subagent. Complete your assigned task and write results to the specified output file.",
+                "You cannot spawn further subagents.",
+            ])
+
+    return "\n".join(lines)
+
+
 def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
     team_listing = _team_listing(layout)
     common_rules = _shared_benchmark_rules()
     coordination_overview = _coordination_overview(family, role)
+    tool_instructions = build_tool_instructions(family, role)
 
     if role.prompt_kind == "single_solver":
         return f"""You are the sole solver in a Helm matrix experiment on a SWE-bench task.
@@ -249,6 +328,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 """
 
     if role.prompt_kind == "independent_selector":
@@ -275,6 +356,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Do not force candidates into a shared plan; the experiment condition is late aggregation.
 """
 
@@ -295,6 +378,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Do not write the global done signal.
 """
 
@@ -321,6 +406,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Workers should not coordinate laterally in this condition unless the harness itself injects a transient message.
 """
 
@@ -340,6 +427,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Do not coordinate laterally with other workers in this condition.
 - Do not write the global done signal.
 """
@@ -360,6 +449,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Do not coordinate laterally with other workers in this condition.
 - Do not write the global done signal.
 """
@@ -380,6 +471,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Do not coordinate laterally with other workers in this condition.
 - Do not write the global done signal.
 """
@@ -400,6 +493,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Do not coordinate laterally with other workers in this condition.
 - Do not write the global done signal.
 """
@@ -420,6 +515,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Coordinate as a peer, not a manager.
 - Do not write the global done signal unless you are the designated closer.
 """
@@ -440,6 +537,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Coordinate as a peer, not a manager.
 - Do not write the global done signal unless you are the designated closer.
 """
@@ -467,6 +566,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Coordinate as a peer, not a manager.
 """
 
@@ -492,6 +593,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Coordinate as a peer, not a manager.
 """
 
@@ -517,6 +620,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Do not micromanage every handoff if workers can resolve it through the allowed lateral channels.
 """
 
@@ -536,6 +641,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Respect the coordinator's overall plan, but use the lateral channels when local peer exchange is beneficial.
 - Do not write the global done signal.
 """
@@ -556,6 +663,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Respect the coordinator's overall plan, but use the lateral channels when local peer exchange is beneficial.
 - Do not write the global done signal.
 """
@@ -576,6 +685,8 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 ## Important
 
 {common_rules}
+
+{tool_instructions}
 - Respect the coordinator's overall plan, but use the lateral channels when local peer exchange is beneficial.
 - Do not write the global done signal.
 """

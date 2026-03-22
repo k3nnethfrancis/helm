@@ -190,6 +190,9 @@ class Experiment:
         coord_backend_config["hub_agent_id"] = hub.id if hub else None
         await self._backend.setup(self.experiment_dir, agent_ids, coord_backend_config)
 
+        # Write topology enforcement config for helm-agent CLI
+        self._write_helm_config()
+
         # Select agent backend
         if self._should_use_direct_cli():
             self._sdk = DirectCLIClient()
@@ -244,6 +247,7 @@ class Experiment:
             agent=session_agent,
             permission_mode="bypass",
             cwd=str(self._session_working_directory()),
+            disallowed_tools=agent.disallowed_tools,
         )
 
         await self._sdk.create_session(session_id, session_config)
@@ -323,6 +327,58 @@ class Experiment:
         metadata = dict(examples[0].metadata)
         benchmark.example_metadata = metadata
         return metadata
+
+    def _write_helm_config(self) -> None:
+        """Write .helm-config.json for the helm-agent CLI to read."""
+        coord_dir = self.experiment_dir / "coordination"
+        coord_dir.mkdir(parents=True, exist_ok=True)
+
+        # Determine family from matrix metadata or pattern name
+        family = "unknown"
+        if self.config.metadata and self.config.metadata.matrix:
+            family = self.config.metadata.matrix.architecture_family
+        elif self.config.name:
+            for f in ("single", "centralized", "decentralized", "hybrid", "independent", "delegating"):
+                if f in self.config.name:
+                    family = f
+                    break
+
+        hub = self.config.get_hub_agent()
+        hub_id = hub.id if hub else None
+        worker_ids = [a.id for a in self.config.agents if a.id != hub_id]
+
+        agents_config: dict = {}
+        for agent in self.config.agents:
+            role = agent.role.value if agent.role else "peer"
+            can_spawn = "Agent" not in agent.disallowed_tools
+            # Build messaging rules based on topology
+            if family == "centralized" and role == "worker":
+                can_message = [hub_id] if hub_id else []
+            elif family == "centralized" and role == "hub":
+                can_message = worker_ids
+            elif family in ("decentralized", "hybrid"):
+                can_message = [a.id for a in self.config.agents if a.id != agent.id]
+            else:
+                can_message = []
+
+            agents_config[agent.id] = {
+                "role": role,
+                "can_spawn": can_spawn,
+                "can_message": can_message,
+            }
+
+        config_data = {
+            "family": family,
+            "experiment_id": self.experiment_id,
+            "harness": self.config.agents[0].harness if self.config.agents else "claude-code",
+            "agents": agents_config,
+            "disallowed_tools_base": ["Agent", "TeamCreate", "SendMessage"],
+            "max_spawn_depth": 1,
+        }
+
+        config_path = coord_dir / ".helm-config.json"
+        with open(config_path, "w") as f:
+            json.dump(config_data, f, indent=2)
 
     def _session_working_directory(self) -> Path:
         """Return the working directory that agent sessions should start in."""

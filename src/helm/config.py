@@ -43,6 +43,7 @@ class AgentConfig(BaseModel):
     model: str | None = None  # Declared model identity for provenance (e.g. "claude-opus-4-6")
     role: AgentRole | None = None
     system_prompt: str = ""
+    disallowed_tools: list[str] = Field(default_factory=list)
 
 
 class OrchestratorRule(BaseModel):

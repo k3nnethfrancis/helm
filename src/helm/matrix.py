@@ -22,6 +22,7 @@ from helm.matrix_families import (
     build_coordination,
     build_orchestrator,
     build_prompt,
+    get_disallowed_tools,
     pattern_runtime_label,
 )
 
@@ -195,6 +196,9 @@ def _build_agents(defaults: MatrixDefaults, family: str, size: int) -> list[dict
             payload["model"] = defaults.model
         if role.runtime_role:
             payload["role"] = role.runtime_role
+        disallowed = get_disallowed_tools(family, role.runtime_role or "worker")
+        if disallowed:
+            payload["disallowed_tools"] = disallowed
         agents.append(payload)
     return agents
 

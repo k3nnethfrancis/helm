@@ -44,6 +44,7 @@ class SessionConfig:
     allowed_commands: list[str] | None = None
     cwd: str | None = None
     session_marker: str | None = None
+    disallowed_tools: list[str] = field(default_factory=list)
 
 
 class SDKEvent:
@@ -590,6 +591,8 @@ class ClaudeAdapter(HarnessAdapter):
         ]
         if config.cwd:
             cmd.extend(["--add-dir", config.cwd])
+        if config.disallowed_tools:
+            cmd.extend(["--disallowedTools", ",".join(config.disallowed_tools)])
         return cmd, None
 
     def parse_event(self, data: dict[str, Any]) -> SDKEvent | None:
@@ -663,6 +666,13 @@ class CodexAdapter(HarnessAdapter):
         ]
         if config.cwd:
             cmd.extend(["-C", config.cwd])
+        if config.disallowed_tools:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Codex does not support --disallowedTools; "
+                "tool restrictions for agent will be prompt-only: %s",
+                config.disallowed_tools,
+            )
         return cmd, None
 
     def parse_event(self, data: dict[str, Any]) -> SDKEvent | None:
