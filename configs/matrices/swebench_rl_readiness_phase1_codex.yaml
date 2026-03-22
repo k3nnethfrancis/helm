@@ -1,13 +1,13 @@
-matrix_id: swebench_rl_readiness_phase1
+matrix_id: swebench_rl_readiness_phase1_codex
 description: >-
-  RL-readiness evidence phase for Helm. Uses counterparty headless judging,
-  broader SWE-bench task coverage, targeted replication, and a dedicated
-  turn-budget ablation before any RL pilot is treated as justified.
-output_root: patterns/generated/swebench_rl_readiness_phase1
+  Codex/GPT-5 arm of the RL-readiness evidence phase. Uses counterparty
+  headless judging (Claude judges Codex), broader SWE-bench task coverage,
+  targeted replication, and turn-budget ablation.
+output_root: patterns/generated/swebench_rl_readiness_phase1_codex
 
 defaults:
-  harness: claude-code
-  model: claude-opus-4-6
+  harness: codex
+  model: gpt-5
   prompt_family: swebench_claude_matrix_v1
   # Validated dimensions only — based on J4 post-hardening counterparty agreement.
   # failure-suppression excluded (0% cross-judge agreement survives hardening).

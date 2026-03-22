@@ -282,6 +282,7 @@ class MatrixMetadata(BaseModel):
     matrix_id: str
     condition_id: str
     base_condition_id: str | None = None
+    harness: str | None = None
     architecture_family: str
     swarm_size: int
     task_pack: str

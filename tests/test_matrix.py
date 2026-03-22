@@ -123,7 +123,7 @@ def test_generate_rl_readiness_manifest_waves(tmp_path: Path) -> None:
         Path(__file__).resolve().parents[1]
         / "configs"
         / "matrices"
-        / "swebench_rl_readiness_phase1.yaml"
+        / "swebench_rl_readiness_phase1_claude.yaml"
     )
 
     broader = generate_matrix_patterns(
@@ -151,6 +151,32 @@ def test_generate_rl_readiness_manifest_waves(tmp_path: Path) -> None:
     assert ablation_config.metadata.matrix.turn_limit_variant in (60, 120, 180)
     assert ablation_config.metadata.matrix.replication_count == 2
     assert ablation_config.limits.max_turns_per_agent in (60, 120, 180)
+
+    # Harness should be in matrix metadata
+    assert ablation_config.metadata.matrix.harness == "claude-code"
+
+
+def test_generate_codex_rl_readiness_manifest(tmp_path: Path) -> None:
+    manifest = (
+        Path(__file__).resolve().parents[1]
+        / "configs"
+        / "matrices"
+        / "swebench_rl_readiness_phase1_codex.yaml"
+    )
+
+    broader = generate_matrix_patterns(
+        manifest,
+        output_root=tmp_path / "broader",
+        wave="broader_panel",
+    )
+
+    assert len(broader["conditions"]) == 6
+
+    # Verify Codex harness flows through to generated patterns
+    first_config = ExperimentConfig.from_yaml(Path(str(broader["conditions"][0]["pattern_path"])))
+    assert first_config.agents[0].harness == "codex"
+    assert first_config.metadata.matrix is not None
+    assert first_config.metadata.matrix.harness == "codex"
 
 
 def test_record_condition_execution_preserves_pending_conditions() -> None:

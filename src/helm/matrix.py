@@ -40,6 +40,7 @@ MATRIX_METADATA_FIELDS = [
     "matrix_id",
     "condition_id",
     "base_condition_id",
+    "harness",
     "architecture_family",
     "swarm_size",
     "task_pack",
@@ -117,6 +118,7 @@ class GeneratedCondition:
     wave: str
     condition_id: str
     base_condition_id: str
+    harness: str
     architecture_family: str
     swarm_size: int
     task_pack: str
@@ -137,6 +139,7 @@ class GeneratedCondition:
             "matrix_id": matrix_id,
             "condition_id": self.condition_id,
             "base_condition_id": self.base_condition_id,
+            "harness": self.harness,
             "architecture_family": self.architecture_family,
             "swarm_size": self.swarm_size,
             "task_pack": self.task_pack,
@@ -309,6 +312,7 @@ def _build_condition(
         wave=wave_name,
         condition_id=condition_id,
         base_condition_id=base_condition_id,
+        harness=manifest.defaults.harness,
         architecture_family=family,
         swarm_size=size,
         task_pack=task_pack,
@@ -669,8 +673,10 @@ def analyze_matrix_summaries(
         return mean(values)
 
     grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    has_harness = any(row.get("harness") for row in rows)
     for row in rows:
         key = (
+            row.get("harness") if has_harness else None,
             row.get("architecture_family"),
             row.get("swarm_size"),
             row.get("task_pack"),
@@ -680,7 +686,7 @@ def analyze_matrix_summaries(
 
     condition_summaries: list[dict[str, Any]] = []
     for key, group_rows in sorted(grouped.items(), key=lambda item: tuple(str(v) for v in item[0])):
-        family, size, task_pack, task_structure = key
+        harness, family, size, task_pack, task_structure = key
         run_count = len(group_rows)
         completed = sum(1 for row in group_rows if row.get("run_outcome") == "completed")
         turn_limit = sum(1 for row in group_rows if row.get("termination_reason") == "turn_limit")
@@ -693,8 +699,10 @@ def analyze_matrix_summaries(
             for row in group_rows
             if row.get("run_outcome") != "completed"
         )
-        condition_summaries.append(
-            {
+        summary_entry: dict[str, Any] = {}
+        if harness:
+            summary_entry["harness"] = harness
+        summary_entry.update({
                 "architecture_family": family,
                 "swarm_size": size,
                 "task_pack": task_pack,
@@ -712,6 +720,7 @@ def analyze_matrix_summaries(
                 "top_failure_modes": dict(failure_modes.most_common(3)),
             }
         )
+        condition_summaries.append(summary_entry)
 
     benchmark_flat_differences: list[dict[str, Any]] = []
     per_example: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -796,13 +805,23 @@ def analyze_matrix_summaries(
         "",
         "## Condition Summaries",
         "",
-        "| family | size | task_pack | task_structure | runs | avg_score | clean_completion | turn_limit_rate | avg_parallel | avg_coord_ratio | avg_duration_s | EC | GD | FS | CD | RW |",
-        "|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|",
+        (
+            "| harness | family | size | task_pack | task_structure | runs | avg_score | clean_completion | turn_limit_rate | avg_parallel | avg_coord_ratio | avg_duration_s | EC | GD | FS | CD | RW |"
+            if has_harness
+            else "| family | size | task_pack | task_structure | runs | avg_score | clean_completion | turn_limit_rate | avg_parallel | avg_coord_ratio | avg_duration_s | EC | GD | FS | CD | RW |"
+        ),
+        (
+            "|---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|"
+            if has_harness
+            else "|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|"
+        ),
     ]
 
     for item in condition_summaries:
+        harness_col = f"{item.get('harness') or 'n/a'} | " if has_harness else ""
         report_lines.append(
             "| "
+            + harness_col
             + f"{item.get('architecture_family') or 'n/a'} | "
             + f"{item.get('swarm_size') or 'n/a'} | "
             + f"{item.get('task_pack') or 'n/a'} | "
