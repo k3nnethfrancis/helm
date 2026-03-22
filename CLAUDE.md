@@ -23,76 +23,54 @@ This breaks down into:
 
 ## Current Priority
 
-The current priority is **RL-readiness evidence hardening**, not immediate RL handoff.
+The current priority is **RL-readiness corpus execution**, gated on validated measurement instruments.
 
-Helm now has enough benchmark and reward-validation evidence to stop treating "can we run a basic cross-harness SWE-bench corpus?" as the main open question:
-- Claude and Codex both have validated SymPy baselines
-- single / hub-spoke / peer are all represented
-- the benchmark-flat / behavior-different topology story survives across both harnesses
-- `closure-first` currently looks like the right first reward family, with `balanced` as the comparison arm
+### Where We Are (2026-03-21)
 
-That means the next sequence should be:
-- use the internal technical report and judge-hardening note as summary anchors, not as permission to start RL immediately
-- treat the completed `3 / 5 / 8` size ladder as a successful broadened pilot, not as sufficient final evidence for training
-- harden the judge path against single-model dependence before using judged dimensions as reward signals
-- expand beyond the current two-task, mostly `n=1` baseline corpus before training conclusions are treated as validated
-- move to the first RL pilot only after the next evidence-hardening phase is complete
+The J4 cross-judge validation phase is complete. Rubric hardening + crash fixes were applied, then a full counterparty re-run validated which dimensions are reliable enough for RL reward:
 
-Judge hardening should focus on:
-- whether the judge sees the right context from multi-agent transcripts and coordination artifacts
-- whether long transcript handling preserves the evidence needed to understand swarm behavior
-- whether verifier context, closure state, and benchmark warnings are surfaced consistently
-- whether the judging path is repeatable and auditable enough for future training use
-- whether Inspect- or Petri-style structured auditing / reproducibility patterns would improve Helm's judge stack
+**Validated dimensions (include in RL-readiness corpus):**
+- `escalation-calibration` — 100% counterparty agreement (fixed from 17% via decision tree)
+- `goal-drift` — 100% counterparty agreement
+- `human-model-accuracy` — 67% counterparty agreement
+- `context-degradation` — 67% (soft signal, improved from 33% + parse failures)
+- `resource-waste` — 33% (soft signal, directionally consistent)
 
-Current judge direction:
-- the multi-view hierarchical judge is now implemented as the mainline path in `helm judge`
-- legacy single-pass judging still exists as explicit audit mode via `--strategy single`
-- the deterministic long-run digest remains an internal preparation mechanism where needed, not the product direction
-- the current operational judge backends are still not sufficient for RL-grade confidence:
-  - `openrouter` has been useful for throughput, but should not remain the primary evidentiary judge path
-  - Helm now exposes explicit `claude-headless` and `codex-headless` judge backends, with `sdk` kept only as a compatibility alias for Claude headless
-  - the next judge phase should use cross-harness counterparty judging as the main validation path
-- the dimension ontology remains `7`, with the measured battery now split into:
-  - `6` active single-run judged dimensions, including `human-model-accuracy`
-  - `1` paired-run dimension, `monitoring-evasion`, which should remain outside the default per-run judge loop
-- the immediate next experimental step is the post-hardening size ladder:
-  - `wave1_size3_pilot` is complete and interpretable
-  - `wave2_size5_pilot` is complete and clean after a one-off rejudge on a single OpenRouter timeout
-  - matrix defaults use `openrouter` for judging to keep the broader baseline phase tractable
-- the encoded follow-on execution order is now:
-  - `wave1_size3_pilot`
-  - `wave2_size5_pilot`
-  - `wave3_size8_pilot`
-  - each later wave is gated on the previous one being complete, interpretable, and free of unresolved execution-path bugs
-- the current gate decision is:
-  - `wave3_size8_pilot` ran unchanged and completed cleanly after manual recovery from an interrupted local session
-  - the repeated OpenRouter timeout was an operational backend issue, now mitigated with a one-time retry in the judge path
-- current baseline state:
-  - the post-hardening `3 / 5 / 8` size ladder is complete
-  - single-agent on the decomposable SymPy anchor is still the only clean closer
-  - all non-single families across sizes `3 / 5 / 8` still end `incomplete / turn_limit`
-  - the core result remains benchmark-flat / behavior-different separation under persistent closure weakness
-- synthesis artifacts now exist:
-  - `notes/shoshin-codex/projects/helm/helm-internal-technical-report-2026-03-20.md`
-  - `notes/shoshin-codex/projects/helm/helm-rl-pilot-design-2026-03-20.md`
-- the immediate downstream task is now an RL-readiness hardening phase:
-  - add cross-harness headless judge validation
-  - implement `human-model-accuracy`
-  - design real paired-run `monitoring-evasion`
-  - run turn-budget ablations on closure-sensitive conditions
-  - run a broader task panel with targeted replication before training
-- the RL pilot recommendation remains provisional:
-  - centralized-family pilot at size `5`
-  - `closure-first` as primary and `balanced` as comparison
-  - only after the evidence-hardening phase still supports that read
-- the immediate engineering state is:
-  - first-pass repo simplification is done enough to resume experiments cleanly
-  - `cli.py` and `matrix.py` no longer carry all helper, family, and export logic inline
-  - further refactors should be justified by the next benchmark phase, not by cleanup for its own sake
+**Excluded:**
+- `failure-suppression` — 0% agreement survives hardening. Needs redesign as trace-derived metric.
 
-Primary planning reference for this phase:
-- `docs/judge-hardening-plan.md`
+**Monitoring-evasion** remains a separate paired-run dimension, outside the default per-run judge loop.
+
+### Judge Configuration
+
+- Primary judge backend: `claude-headless` with `claude-sonnet-4-6`
+- Counterparty validation uses `codex-headless` (GPT-5)
+- OpenRouter deprecated as judge backend — used only for historical compatibility
+- Hierarchical judging is the mainline strategy
+- Codex-headless has retry-on-empty for parse failure resilience
+
+### Baseline Evidence
+
+- Post-hardening `3 / 5 / 8` size ladder complete on SWE-bench
+- Cross-harness baselines (Claude Code + Codex) validated on SymPy slice
+- Core result: benchmark-flat / behavior-different separation under persistent closure weakness
+- Single-agent is the only clean closer; all non-single families end `incomplete / turn_limit`
+
+### Next Sequence
+
+1. **Run RL-readiness corpus** (`swebench_rl_readiness_phase1.yaml`):
+   - `broader_panel`: 8 tasks × 3 families (single, centralized, hybrid) at sizes 1 & 5
+   - `replicated_decision_slice`: targeted n=2 replication on anchor tasks
+   - `turn_budget_ablation`: 60/120/180 turns on centralized@5 SymPy anchor
+2. **Draft blog post** centered on measurement integrity narrative (before/after J4 table is central figure)
+3. **RL pilot** (gated on corpus results): centralized@5, closure-first primary, balanced comparison
+
+### Key Synthesis Artifacts
+
+- `notes/shoshin-codex/projects/helm/helm-internal-technical-report-2026-03-20.md`
+- `notes/shoshin-codex/projects/helm/helm-rl-pilot-design-2026-03-20.md`
+- `notes/shoshin-codex/projects/helm/helm-j4-crossjudge-synthesis-2026-03-21.md`
+- `notes/shoshin-codex/projects/helm/helm-j4-post-hardening-synthesis-2026-03-21.md`
 
 Use Claude Code as the main execution path unless there is a specific reason to widen to Codex or another harness.
 

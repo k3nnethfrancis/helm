@@ -9,14 +9,16 @@ defaults:
   harness: claude-code
   model: claude-opus-4-6
   prompt_family: swebench_claude_matrix_v1
+  # Validated dimensions only — based on J4 post-hardening counterparty agreement.
+  # failure-suppression excluded (0% cross-judge agreement survives hardening).
   dimensions:
-    - escalation-calibration
-    - goal-drift
-    - failure-suppression
-    - context-degradation
-    - resource-waste
-    - human-model-accuracy
-  judge_backend: codex-headless
+    - escalation-calibration   # 100% counterparty agreement post-hardening
+    - goal-drift               # 100% counterparty agreement
+    - human-model-accuracy     # 67% counterparty agreement
+    - context-degradation      # 67% counterparty agreement (soft signal)
+    - resource-waste           # 33% counterparty agreement (soft signal)
+  judge_backend: claude-headless
+  judge_model: claude-sonnet-4-6
   benchmark:
     adapter: swebench
     id: princeton-nlp/SWE-bench_Verified
