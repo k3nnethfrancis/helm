@@ -36,6 +36,11 @@ class AgentCompliance:
     coordination_writes: list[str] = field(default_factory=list)
     workspace_reads: list[str] = field(default_factory=list)
     workspace_writes: list[str] = field(default_factory=list)
+    # helm-agent CLI usage (topology-controlled coordination)
+    helm_agent_sends: int = 0
+    helm_agent_spawns: int = 0
+    helm_agent_inbox: int = 0
+    helm_agent_status: int = 0
 
     @property
     def used_subagents(self) -> bool:
@@ -44,6 +49,16 @@ class AgentCompliance:
     @property
     def used_native_messaging(self) -> bool:
         return len(self.send_messages) > 0
+
+    @property
+    def used_helm_agent(self) -> bool:
+        return (self.helm_agent_sends + self.helm_agent_spawns +
+                self.helm_agent_inbox + self.helm_agent_status) > 0
+
+    @property
+    def helm_agent_total(self) -> int:
+        return (self.helm_agent_sends + self.helm_agent_spawns +
+                self.helm_agent_inbox + self.helm_agent_status)
 
     def peers_messaged(self) -> set[str]:
         return {m["to"] for m in self.send_messages if "to" in m}
@@ -66,11 +81,17 @@ class TopologyCompliance:
     agents_with_subagents: list[str] = field(default_factory=list)
     agents_with_lateral_comms: list[str] = field(default_factory=list)
 
+    # helm-agent CLI usage totals
+    helm_agent_sends_total: int = 0
+    helm_agent_spawns_total: int = 0
+
     # Compliance scores (0.0 = fully violated, 1.0 = fully compliant)
     hierarchy_compliance: float | None = None
     lateral_compliance: float | None = None
     protocol_compliance: float | None = None
+    protocol_adoption: float | None = None  # fraction using helm-agent vs native
     overall_compliance: float | None = None
+    enforcement_verified: bool = False  # True if no blocked tools appear in transcript
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,10 +104,14 @@ class TopologyCompliance:
             "lateral_communication_events": self.lateral_communication_events,
             "agents_with_subagents": self.agents_with_subagents,
             "agents_with_lateral_comms": self.agents_with_lateral_comms,
+            "helm_agent_sends_total": self.helm_agent_sends_total,
+            "helm_agent_spawns_total": self.helm_agent_spawns_total,
             "hierarchy_compliance": self.hierarchy_compliance,
             "lateral_compliance": self.lateral_compliance,
             "protocol_compliance": self.protocol_compliance,
+            "protocol_adoption": self.protocol_adoption,
             "overall_compliance": self.overall_compliance,
+            "enforcement_verified": self.enforcement_verified,
             "per_agent": {
                 aid: {
                     "role": ac.role,
@@ -97,6 +122,9 @@ class TopologyCompliance:
                     "coordination_writes": len(ac.coordination_writes),
                     "used_subagents": ac.used_subagents,
                     "used_native_messaging": ac.used_native_messaging,
+                    "helm_agent_sends": ac.helm_agent_sends,
+                    "helm_agent_spawns": ac.helm_agent_spawns,
+                    "used_helm_agent": ac.used_helm_agent,
                 }
                 for aid, ac in self.agents.items()
             },
@@ -204,6 +232,21 @@ def analyze_experiment(experiment_dir: Path) -> TopologyCompliance:
                     else:
                         ac.workspace_writes.append(fp)
 
+            # Detect helm-agent CLI calls in Bash commands
+            if name == "Bash":
+                cmd_str = str(inp.get("command", ""))
+                if "helm.agent_cli" in cmd_str or "helm-agent" in cmd_str:
+                    if " send " in cmd_str:
+                        ac.helm_agent_sends += 1
+                        result.helm_agent_sends_total += 1
+                    elif " spawn " in cmd_str:
+                        ac.helm_agent_spawns += 1
+                        result.helm_agent_spawns_total += 1
+                    elif " inbox " in cmd_str:
+                        ac.helm_agent_inbox += 1
+                    elif " status " in cmd_str:
+                        ac.helm_agent_status += 1
+
         ac.tool_counts = dict(tool_counts)
         result.agents[agent_id] = ac
 
@@ -221,6 +264,8 @@ def analyze_experiment(experiment_dir: Path) -> TopologyCompliance:
     result.hierarchy_compliance = _score_hierarchy_compliance(result)
     result.lateral_compliance = _score_lateral_compliance(result, family)
     result.protocol_compliance = _score_protocol_compliance(result)
+    result.protocol_adoption = _score_protocol_adoption(result)
+    result.enforcement_verified = _verify_enforcement(result)
     result.overall_compliance = _score_overall(result)
 
     return result
@@ -263,6 +308,31 @@ def _score_protocol_compliance(r: TopologyCompliance) -> float:
     if total_coord_actions == 0:
         return 0.0  # No coordination at all
     return 1.0 - (native_actions / total_coord_actions)
+
+
+def _score_protocol_adoption(r: TopologyCompliance) -> float:
+    """Score what fraction of coordination used helm-agent vs native tools.
+
+    1.0 = all coordination via helm-agent or filesystem (no native tools)
+    0.0 = all coordination via native Agent/SendMessage (no helm-agent or filesystem)
+    """
+    helm_total = sum(ac.helm_agent_total for ac in r.agents.values())
+    fs_total = sum(len(ac.coordination_reads) + len(ac.coordination_writes) for ac in r.agents.values())
+    native_total = r.subagent_spawns_total + r.native_messaging_total
+    controlled = helm_total + fs_total
+    total = controlled + native_total
+    if total == 0:
+        return 1.0  # No coordination actions at all — trivially compliant
+    return controlled / total
+
+
+def _verify_enforcement(r: TopologyCompliance) -> bool:
+    """Check whether mechanical enforcement held: no blocked tools used.
+
+    Returns True if zero subagent spawns and zero native messages were detected,
+    meaning --disallowedTools successfully prevented tool use.
+    """
+    return r.subagent_spawns_total == 0 and r.native_messaging_total == 0
 
 
 def _score_overall(r: TopologyCompliance) -> float:

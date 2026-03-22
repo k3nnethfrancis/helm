@@ -11,6 +11,7 @@ SUPPORTED_FAMILY_SIZES: dict[str, set[int]] = {
     "centralized": {2, 3, 5, 8},
     "decentralized": {2, 3, 5, 8},
     "hybrid": {2, 3, 5, 8},
+    "delegating": {1, 3, 5},
 }
 
 COORDINATION_FAMILY_LABELS = {
@@ -173,6 +174,21 @@ FAMILY_LAYOUTS: dict[str, dict[int, list[RoleSpec]]] = {
             RoleSpec("reviewer_b", "worker", "hybrid_reviewer"),
         ],
     },
+    "delegating": {
+        1: [RoleSpec("delegator", "hub", "delegating_solo", closer=True)],
+        3: [
+            RoleSpec("delegator", "hub", "delegating_coordinator", closer=True),
+            RoleSpec("worker_a", "worker", "delegating_worker"),
+            RoleSpec("worker_b", "worker", "delegating_worker"),
+        ],
+        5: [
+            RoleSpec("delegator", "hub", "delegating_coordinator", closer=True),
+            RoleSpec("worker_a", "worker", "delegating_worker"),
+            RoleSpec("worker_b", "worker", "delegating_worker"),
+            RoleSpec("worker_c", "worker", "delegating_worker"),
+            RoleSpec("worker_d", "worker", "delegating_worker"),
+        ],
+    },
 }
 
 
@@ -181,6 +197,8 @@ def pattern_runtime_label(family: str) -> str:
         return "single-agent"
     if family == "decentralized":
         return "peer-network"
+    if family == "delegating":
+        return "delegating"
     return "hub-and-spoke"
 
 
@@ -201,6 +219,22 @@ def _coordination_overview(family: str, role: RoleSpec) -> str:
                 "",
                 "Ephemeral channel:",
                 "- Live follow-up messages may arrive when the harness supports them; they are fast but transient.",
+            ]
+        )
+    if family == "delegating":
+        return "\n".join(
+            [
+                "Persistent channels:",
+                "- `coordination/tasks/` for durable assignments to pre-assigned workers.",
+                "- `coordination/results/` for subagent output (written by spawned agents).",
+                "- `coordination/signals/` for verification and completion markers.",
+                "- `coordination/spawn_log.jsonl` for spawn audit trail.",
+                "",
+                "Coordination CLI (use via Bash):",
+                "- `python -m helm.agent_cli spawn --parent {your_id} --task '...' --role worker`",
+                "- `python -m helm.agent_cli send --from {your_id} --to {recipient} --msg '...'`",
+                "- `python -m helm.agent_cli inbox --agent {your_id}`",
+                "- `python -m helm.agent_cli status --agent {agent_id}`",
             ]
         )
     if family in {"independent", "centralized"}:
@@ -688,6 +722,84 @@ def build_prompt(family: str, layout: list[RoleSpec], role: RoleSpec) -> str:
 
 {tool_instructions}
 - Respect the coordinator's overall plan, but use the lateral channels when local peer exchange is beneficial.
+- Do not write the global done signal.
+"""
+
+    if role.prompt_kind == "delegating_solo":
+        return f"""You are a single agent that may delegate subtasks to subagents.
+
+## Coordination Affordances
+
+{coordination_overview}
+
+## Instructions
+
+1. Read the problem statement carefully.
+2. Decide whether to solve directly or decompose into subtasks.
+3. You may delegate subtasks using: `python -m helm.agent_cli spawn --parent {role.agent_id} --task "subtask" --role worker`
+4. Spawned subagents write results to `coordination/results/`. Read their output to integrate.
+5. Write the final fix yourself or integrate subagent contributions.
+6. Verify the fix thoroughly.
+7. Write `coordination/signals/verification-summary.md`.
+8. Only then write `coordination/signals/done`.
+
+## Important
+
+{common_rules}
+
+{tool_instructions}
+- You decide the decomposition strategy — the system does not prescribe one.
+- Spawned subagents cannot spawn further subagents.
+"""
+
+    if role.prompt_kind == "delegating_coordinator":
+        return f"""You are the delegating coordinator. You may spawn subagents to parallelize work.
+
+## Team
+
+{team_listing}
+
+## Coordination Affordances
+
+{coordination_overview}
+
+## Instructions
+
+1. Decompose the task into subtasks as you see fit.
+2. You may spawn additional subagents: `python -m helm.agent_cli spawn --parent {role.agent_id} --task "subtask" --role worker`
+3. Use `coordination/tasks/` for durable assignments to pre-assigned workers.
+4. Spawned subagents write results to `coordination/results/`.
+5. Integrate results and verify the fix.
+6. Write `coordination/signals/verification-summary.md`.
+7. Only then write `coordination/signals/done`.
+
+## Important
+
+{common_rules}
+
+{tool_instructions}
+- Pre-assigned workers communicate via filesystem only.
+- You decide when to use pre-assigned workers vs spawning new subagents.
+"""
+
+    if role.prompt_kind == "delegating_worker":
+        return f"""You are `{role.agent_id}`, a worker assigned by the delegating coordinator.
+
+## Coordination Affordances
+
+{coordination_overview}
+
+## Instructions
+
+1. Work on tasks assigned in `coordination/tasks/{role.agent_id}/`.
+2. Publish findings and status through coordination filesystem.
+3. You cannot spawn subagents or use native messaging tools.
+
+## Important
+
+{common_rules}
+
+{tool_instructions}
 - Do not write the global done signal.
 """
 
