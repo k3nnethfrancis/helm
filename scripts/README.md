@@ -1,21 +1,20 @@
 # Helm Scripts
 
-Scripts exist to support the active experiment loop. If a script is not part of that loop, it should be deleted or moved out of the repo.
+## Experiment Pipeline
 
-Active script groups:
+```
+generate_experiment_matrix.py → run_experiment_matrix.py → analyze_experiment_matrix.py
+```
 
-- Matrix
-  - `generate_experiment_matrix.py`
-  - `run_experiment_matrix.py`
-  - `analyze_experiment_matrix.py`
-- Judge / reward validation
-  - `audit_judge_inputs.py`
-  - `run_judge_repeatability.py`
-  - `run_judge_strategy_comparison.py`
-  - `run_offline_reward_sweep.py`
-- Benchmark substrate
-  - `download_swebench.py`
-  - `verify_swebench.py`
-  - `verify_dataset_contract.py`
+- `generate_experiment_matrix.py` — Generate experiment patterns from a matrix manifest YAML
+- `run_experiment_matrix.py` — Run a generated matrix wave end-to-end (benchmark + judge + analyze)
+- `analyze_experiment_matrix.py` — Analyze results from completed matrix runs
 
-Delete one-off spikes after they stop informing the active research program.
+## Judge Validation
+
+- `run_judge_backend_comparison.py` — Cross-judge counterparty comparison on saved experiments
+
+## Benchmark
+
+- `download_swebench.py` — Download SWE-bench Verified dataset from HuggingFace
+- `verify_swebench.py` — SWE-bench ground truth verifier (clone, patch, run tests)

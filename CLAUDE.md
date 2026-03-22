@@ -23,47 +23,46 @@ This breaks down into:
 
 ## Current Priority
 
-The current priority is **RL-readiness corpus execution**, gated on validated measurement instruments.
+The current priority is **topology enforcement and repo cleanup before the next experiment run**.
 
-### Where We Are (2026-03-21)
+### Where We Are (2026-03-22)
 
-The J4 cross-judge validation phase is complete. Rubric hardening + crash fixes were applied, then a full counterparty re-run validated which dimensions are reliable enough for RL reward:
+**Critical finding:** Topology compliance analysis of the broader_panel corpus (24 runs) revealed that agents systematically violate prescribed topologies:
+- **All 16 multi-agent runs** spawned subagents via Claude Code's native `Agent` tool (38 total spawns)
+- **Even 2/8 single-agent runs** used `Agent` tool for delegation
+- Centralized coordinators used `SendMessage` (9 times) instead of the filesystem protocol
+- **Result: prior topology comparisons are confounded.** "Centralized" was actually "centralized + hidden subagents." Task score differences cannot be attributed to topology alone.
 
-**Validated dimensions (include in RL-readiness corpus):**
-- `escalation-calibration` — 100% counterparty agreement (fixed from 17% via decision tree)
+**The fix:** Mechanical tool enforcement, not prompt steering.
+- Claude Code supports `--disallowedTools` to block `Agent`, `TeamCreate`, `SendMessage`
+- Helm needs a controlled alternative: a Helm CLI/tool that agents call to coordinate, with topology rules enforced at the tool level
+- This is the prerequisite for valid topology experiments
+
+### What's Validated (Still Good)
+
+**Judge dimensions (J4 post-hardening, 2026-03-21):**
+- `escalation-calibration` — 100% counterparty agreement
 - `goal-drift` — 100% counterparty agreement
 - `human-model-accuracy` — 67% counterparty agreement
-- `context-degradation` — 67% (soft signal, improved from 33% + parse failures)
-- `resource-waste` — 33% (soft signal, directionally consistent)
+- `context-degradation` — 67% (soft signal)
+- `resource-waste` — 33% (soft signal)
+- `failure-suppression` — excluded (0% agreement)
 
-**Excluded:**
-- `failure-suppression` — 0% agreement survives hardening. Needs redesign as trace-derived metric.
+**Topology compliance analyzer** (`src/helm/topology_compliance.py`): extracts tool usage, subagent spawns, messaging patterns, and filesystem coordination from transcripts. Produces per-agent and per-experiment compliance scores.
 
-**Monitoring-evasion** remains a separate paired-run dimension, outside the default per-run judge loop.
+### What's Invalid (Needs Re-Run After Enforcement)
 
-### Judge Configuration
-
-- Primary judge backend: `claude-headless` with `claude-sonnet-4-6`
-- Counterparty validation uses `codex-headless` (GPT-5)
-- OpenRouter deprecated as judge backend — used only for historical compatibility
-- Hierarchical judging is the mainline strategy
-- Codex-headless has retry-on-empty for parse failure resilience
-
-### Baseline Evidence
-
-- Post-hardening `3 / 5 / 8` size ladder complete on SWE-bench
-- Cross-harness baselines (Claude Code + Codex) validated on SymPy slice
-- Core result: benchmark-flat / behavior-different separation under persistent closure weakness
-- Single-agent is the only clean closer; all non-single families end `incomplete / turn_limit`
+- All prior topology comparison results (size ladder, broader panel)
+- The `benchmark-flat / behavior-different` narrative is still directionally suggestive but not cleanly attributable to topology
+- The broader_panel wave needs to be re-run after enforcement is implemented
 
 ### Next Sequence
 
-1. **Run RL-readiness corpus** (`swebench_rl_readiness_phase1.yaml`):
-   - `broader_panel`: 8 tasks × 3 families (single, centralized, hybrid) at sizes 1 & 5
-   - `replicated_decision_slice`: targeted n=2 replication on anchor tasks
-   - `turn_budget_ablation`: 60/120/180 turns on centralized@5 SymPy anchor
-2. **Draft blog post** centered on measurement integrity narrative (before/after J4 table is central figure)
-3. **RL pilot** (gated on corpus results): centralized@5, closure-first primary, balanced comparison
+1. **Build topology enforcement layer** — Helm CLI tool + `--disallowedTools` integration in adapters
+2. **Clean the repo for sharing** — delete stale patterns, gitignore experiments, document topology designs
+3. **Re-run broader_panel** with mechanical enforcement + compliance verification
+4. **Run Codex mirror** when budget available
+5. **Blog post** gated on clean, enforced, compliance-verified data
 
 ### Key Synthesis Artifacts
 
