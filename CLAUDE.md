@@ -104,19 +104,28 @@ Define experiment (task + swarm policy + harness) → Run agents on task
 
 The canonical artifact is the **swarm rollout**: task, topology, harness, orchestration policy, full trace, verifier outcome, and derived behavioral scores. Per-agent views are useful projections of that artifact, not the primary object of study.
 
-### The Seven Dimensions
+### Behavioral Dimensions
 
-Candidate behavioral dimensions complementary to task performance. These are working hypotheses about coordination quality and human steerability, not a frozen ontology:
+Five validated dimensions (J4 cross-judge agreement), one excluded, one paired-run:
 
-1. **Goal drift** — Do subtasks stay aligned with original objective?
-2. **Context degradation** — Does information lose fidelity across agents?
-3. **Failure suppression** — Are errors hidden from parent/human?
-4. **Escalation calibration** — Does the system ask for help appropriately?
-5. **Resource waste** — Is work duplicated? Tokens burned on dead ends?
-6. **Monitoring evasion** — Does the swarm behave differently when observed?
-7. **Human model accuracy** — Does the swarm understand human intent?
+**Validated (include in experiments):**
+1. **Escalation calibration** — 100% cross-judge agreement
+2. **Goal drift** — 100% cross-judge agreement
+3. **Human model accuracy** — 67% cross-judge agreement
+4. **Context degradation** — 67% (soft signal)
+5. **Resource waste** — 33% (soft signal, directionally consistent)
 
-These dimensions are first evaluation instruments. Some may later become training targets if they prove stable and useful.
+**Excluded:** Failure suppression — 0% cross-judge agreement survives hardening. Needs trace-derived redesign.
+
+**Paired-run only:** Monitoring evasion — requires A/B experimental design, not per-run scoring.
+
+### Topology Enforcement
+
+Topologies are mechanically enforced, not just prompt-steered:
+- `--disallowedTools` blocks native Agent/TeamCreate/SendMessage per `TOPOLOGY_RULES`
+- `helm-agent` CLI (`agent_cli.py`) provides controlled send/inbox/status/spawn
+- `.helm-config.json` written during setup with per-agent permissions
+- `topology_compliance.py` verifies enforcement held post-run
 
 ### The Stack
 
@@ -167,23 +176,23 @@ helm/
 │   ├── cli.py            # Main Typer command surface
 │   ├── cli_shared.py     # Shared CLI helpers (paths, escalation, turn limits, output)
 │   ├── cli_benchmark.py  # Benchmark/report/export CLI implementation helpers
+│   ├── agent_cli.py      # Helm-controlled coordination CLI (send/inbox/status/spawn)
 │   ├── collector.py      # Event aggregation and transcript generation
 │   ├── config.py         # Pydantic models for experiment YAML config
 │   ├── experiment.py     # Experiment lifecycle management
 │   ├── judge.py          # Multi-backend judge (Claude/Codex headless + OpenRouter)
 │   ├── matrix.py         # Matrix manifest loading, generation flow, and analysis
-│   ├── matrix_families.py # Architecture families, prompts, coordination/orchestrator defs
+│   ├── matrix_families.py # Architecture families, topology rules, prompts, coordination defs
 │   ├── runtime_guard.py  # Rule-based intervention engine
 │   ├── run_data.py       # Run-data contract + orchestration evals
-│   └── sdk.py            # Python client for Sandbox Agent SDK REST/SSE
-├── configs/              # Matrix manifests
+│   ├── sdk.py            # DirectCLI client + harness adapters (Claude, Codex, OpenCode)
+│   └── topology_compliance.py  # Deterministic topology compliance analysis
+├── configs/matrices/     # Matrix manifests (source of truth for experiments)
 ├── docs/                 # Small active doc set
-│   └── README.md         # Doc map and restart order
-├── judges/               # Dimension scoring rubrics
-├── patterns/             # Hand-authored experiment YAML configs
-│   └── generated/        # Generated matrix outputs (runtime artifacts)
-├── experiments/          # Experiment run data
-├── scripts/              # Matrix, judge, and benchmark support scripts
+├── judges/               # Dimension scoring rubrics (5 active + 1 excluded)
+├── patterns/generated/   # Generated matrix outputs (runtime artifacts, gitignored)
+├── experiments/          # Experiment run data (gitignored)
+├── scripts/              # Pipeline scripts (generate → run → analyze + judge comparison)
 ├── data/                 # Benchmark datasets (gitignored)
 └── bin/                  # SDK binary
 ```
@@ -202,42 +211,36 @@ helm/
 # Install the package (editable mode)
 uv pip install -e .
 
-# Validate a pattern config
-helm validate patterns/hub-and-spoke.yaml
+# Generate experiment patterns from a matrix manifest
+python scripts/generate_experiment_matrix.py configs/matrices/<manifest>.yaml --wave <wave>
 
-# Run an experiment
-helm run patterns/hub-and-spoke.yaml --task "Build a simple web server"
+# Run a benchmark wave (generates, runs, verifies, and judges)
+python scripts/run_experiment_matrix.py configs/matrices/<manifest>.yaml --wave <wave>
 
-# Score an experiment
-helm judge <experiment-id> --dimensions escalation-calibration,goal-drift
+# Or run a single generated pattern
+helm benchmark run patterns/generated/<matrix>/<pattern>.yaml -n 4 --on-turn-limit end --direct-cli
 
-# Analyze an experiment
-helm analyze <experiment-id>
-```
+# Score a completed experiment
+helm judge <experiment-id> -b claude-headless -m claude-sonnet-4-6
 
-### Benchmark Mode
-
-```bash
-# Run sampled benchmark experiments
-helm benchmark run patterns/benchmark-swebench-single-claude.yaml -n 10 --seed 42
-
-# Generate baseline report
-helm benchmark report experiments/benchmark-runs/<summary>.json
-
-# Export training data
-helm benchmark export experiments/benchmark-runs/<summary>.json
+# Analyze matrix results
+python scripts/analyze_experiment_matrix.py experiments/benchmark-runs/<summary1>.json <summary2>.json
 ```
 
 ### Adding a New Dimension
 
 1. Create `judges/{dimension-name}.md` with scoring rubric
-2. Add dimension to `docs/dimensions.md`
-3. Update experiment configs to include new dimension
+2. Add dimension to `docs/dimensions.md` and `src/helm/cli_shared.py:ACTIVE_BEHAVIORAL_DIMENSIONS`
+3. Validate cross-judge agreement before using as reward signal
 
-### Adding a New Coordination Pattern
+### Adding a New Topology Family
 
-1. Create `patterns/{pattern-name}.yaml` with topology
-2. Run comparison experiments
+1. Add layouts to `FAMILY_LAYOUTS` in `src/helm/matrix_families.py`
+2. Add topology rules to `TOPOLOGY_RULES` (which tools to block per role)
+3. Add coordination label to `COORDINATION_FAMILY_LABELS`
+4. Add supported sizes to `SUPPORTED_FAMILY_SIZES`
+5. Write system prompts for each role in `build_prompt()`
+6. Add tool instructions via `build_tool_instructions()`
 
 ## Design Principles
 

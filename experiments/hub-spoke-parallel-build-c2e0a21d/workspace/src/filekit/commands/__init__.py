@@ -1,1 +1,0 @@
-"""filekit subcommands."""

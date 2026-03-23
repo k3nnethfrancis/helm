@@ -1,47 +1,33 @@
 # Helm Docs
 
-Active docs only. This directory should explain how Helm works now, not preserve every past phase.
+Active docs only. This directory explains how Helm works now.
 
 Read in this order when restarting:
+1. `../CLAUDE.md` — project context, current priority, structure
+2. `architecture.md` — system shape and pipelines
+3. `dimensions.md` — behavioral dimensions and scoring
+4. `coordination-design-principles.md` — runtime vs policy boundaries
+5. `run-data-contract.md` — derived artifact contract
 
-1. `../CLAUDE.md`
-2. `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/vision.md`
-3. `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/roadmap.md`
-4. `rq1-experiment-plan.md`
-5. `judge-hardening-plan.md`
-6. `architecture.md`
-7. `dimensions.md`
-8. `monitoring-evasion-design.md`
-9. `run-data-contract.md`
+Reference docs (historical context, not active planning):
+- `rq1-experiment-plan.md` — original experiment program (mostly superseded by matrix manifests)
+- `judge-hardening-plan.md` — judge architecture evolution (hardening complete)
+- `monitoring-evasion-design.md` — paired-run design for the 7th dimension (deferred)
+- `resources.md` — external references
 
 What each file is for:
-- `architecture.md`
-  System shape and the main pipelines.
-- `coordination-design-principles.md`
-  Runtime vs policy boundary for coordination.
-- `dimensions.md`
-  Behavioral dimensions, including the six active single-run judged dimensions.
-- `monitoring-evasion-design.md`
-  Paired-run design for the seventh dimension, `monitoring-evasion`.
-- `judge-hardening-plan.md`
-  Judge architecture and hardening path.
-- `resources.md`
-  External references worth keeping close.
-- `rq1-experiment-plan.md`
-  Active experiment program and matrix phase.
-- `run-data-contract.md`
-  Derived artifact contract for analysis/export.
+- `architecture.md` — System shape, the three pipelines, coordination patterns
+- `coordination-design-principles.md` — Runtime vs policy boundary for coordination
+- `dimensions.md` — 5 validated + 1 excluded + 1 paired-run behavioral dimensions
+- `run-data-contract.md` — Derived artifact contract for analysis/export
 
-Project-state logs do not live here:
+Project-state logs live in the vault:
+- ledger: `shoshin-codex/projects/helm/progress-ledger.md`
+- research log: `shoshin-codex/projects/helm/research-log.md`
+- tasks: `shoshin-codex/tasks.md`
 
-- priorities: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/tasks.md`
-- long-term vision: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/vision.md`
-- long-term roadmap: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/roadmap.md`
-- ledger: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/progress-ledger.md`
-- research log: `/Users/kenneth/Desktop/lab/notes/shoshin-codex/projects/helm/research-log.md`
-
-Use the ledger as the continuity layer when restarting work.
-
-Source-structure note:
-- `src/helm/cli.py` is now the main command surface, with shared helpers in `src/helm/cli_shared.py` and benchmark/report/export implementation in `src/helm/cli_benchmark.py`
-- `src/helm/matrix.py` now focuses on manifest loading, generation flow, and summary analysis, while architecture family layouts/prompts live in `src/helm/matrix_families.py`
+Source structure:
+- `src/helm/cli.py` — main command surface
+- `src/helm/matrix_families.py` — topology families, rules, prompts
+- `src/helm/agent_cli.py` — helm-agent coordination CLI
+- `src/helm/topology_compliance.py` — compliance analysis

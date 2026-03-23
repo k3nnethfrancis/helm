@@ -36,24 +36,19 @@ The canonical artifact in Helm is not a model answer. It is a **swarm rollout**:
 
 ## Near-Term Program
 
-The current phase is **RL-readiness evidence hardening**.
+The current phase is **topology enforcement + clean experiment corpus**.
 
-Helm has already completed the first reward-validation and judge-hardening pass:
-- the hierarchical judge is now the default path
-- cross-harness topology baselines exist for Claude and Codex
-- the benchmark-flat / behavior-different result is established on the validated SymPy slice
-- `closure-first` is the current leading reward family, with `balanced` as the comparison arm
+### What's done
+- **Judge validation (J4):** 5/6 behavioral dimensions validated via cross-judge counterparty comparison (Codex ↔ Claude Sonnet). Failure-suppression excluded (0% agreement).
+- **Topology enforcement:** Mechanical enforcement via `--disallowedTools` blocks native Agent/TeamCreate/SendMessage. Controlled coordination through `helm-agent` CLI. Verified: 1.00 compliance on enforced runs vs 0.55-0.82 without enforcement.
+- **Topology compliance analyzer:** Deterministic extraction of subagent spawns, native messaging, lateral communication, and filesystem protocol usage from transcripts.
+- **6 topology families:** single, independent, centralized, decentralized, hybrid, delegating (new — hub can spawn subagents via helm-agent CLI).
 
-The broader `3 / 5 / 8` baseline program is now complete. That result was enough to support an internal RL recommendation, but not enough to skip one more evidence phase.
-
-That means the next job is to harden the evidence before any RL handoff:
-- reduce judge-model dependence
-- broaden beyond the current narrow task corpus
-- add replication on key conditions
-- run turn-budget ablations on closure-sensitive slices
-- complete more of the dimension ontology before using it as a reward substrate
-
-See [docs/rq1-experiment-plan.md](/Users/kenneth/Desktop/lab/projects/helm/docs/rq1-experiment-plan.md) for the active experiment program and [docs/judge-hardening-plan.md](/Users/kenneth/Desktop/lab/projects/helm/docs/judge-hardening-plan.md) for the current judge architecture.
+### What's next
+1. Clean the repo for open-source sharing
+2. Re-run the broader panel (8 tasks × 3+ families) with mechanical enforcement
+3. Run Codex mirror (same tasks, different harness) for head-to-head comparison
+4. Blog post reporting which agents and topologies produce better multi-agent coordination on SWE-bench
 
 ## What Helm Does
 
