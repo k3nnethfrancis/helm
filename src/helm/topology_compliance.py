@@ -163,7 +163,7 @@ def analyze_experiment(experiment_dir: Path) -> TopologyCompliance:
         metadata = json.load(f)
 
     # Extract prescribed topology
-    matrix = metadata.get("matrix", {})
+    matrix = metadata.get("matrix") or {}
     family = matrix.get("architecture_family", metadata.get("pattern", "unknown"))
     pattern = metadata.get("pattern", "unknown")
     agents_meta = metadata.get("agents", [])
