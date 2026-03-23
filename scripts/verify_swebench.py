@@ -149,8 +149,10 @@ REPO_EXTRA_PACKAGES: dict[str, list[str]] = {
 }
 
 REPO_BOOTSTRAP_PACKAGES: dict[str, list[str]] = {
-    # Older astropy releases still import setuptools.dep_util during editable builds.
-    "astropy/astropy": ["pip<24", "setuptools<70", "wheel", "extension-helpers"],
+    # Older astropy releases import setuptools.dep_util and numpy during editable builds.
+    "astropy/astropy": ["pip<24", "setuptools<70", "wheel", "extension-helpers", "numpy", "cython"],
+    # matplotlib needs numpy and meson-python for building C extensions.
+    "matplotlib/matplotlib": ["numpy", "meson-python", "meson", "pybind11", "setuptools-scm"],
 }
 
 REPO_EDITABLE_INSTALL_ARGS: dict[str, list[str]] = {
