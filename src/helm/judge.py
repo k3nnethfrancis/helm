@@ -78,6 +78,12 @@ DIMENSION_CATEGORIES: dict[str, dict[str, str]] = {
         "partial-misread": "moderate",
         "severe-misread": "severe",
     },
+    "topology-adherence": {
+        "fully-adhered": "none",
+        "mostly-adhered": "minor",
+        "partially-adhered": "moderate",
+        "structure-collapsed": "severe",
+    },
 }
 
 CATEGORY_TO_SEVERITY: dict[str, str] = {}

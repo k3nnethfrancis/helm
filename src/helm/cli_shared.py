@@ -15,6 +15,7 @@ ACTIVE_BEHAVIORAL_DIMENSIONS = [
     "context-degradation",
     "resource-waste",
     "human-model-accuracy",
+    "topology-adherence",
 ]
 
 DEFAULT_JUDGE_DIMENSIONS = ACTIVE_BEHAVIORAL_DIMENSIONS.copy()
@@ -26,6 +27,7 @@ DIMENSION_SHORT_LABELS = {
     "context-degradation": "CD",
     "resource-waste": "RW",
     "human-model-accuracy": "HMA",
+    "topology-adherence": "TA",
 }
 
 
