@@ -238,7 +238,7 @@ Experiment run
 
 **Current limitation**: Export pipeline (`helm benchmark export`) still privileges simplified training rows. Full multi-turn traces with tool use sequences are collected, but the dataset story for swarm-level and orchestrator-level optimization is still evolving.
 
-**Near-term implication**: the next phase is offline reward validation, not immediate online RL. See [rq1-experiment-plan.md](/Users/kenneth/Desktop/lab/projects/helm/docs/rq1-experiment-plan.md).
+**Near-term implication**: reward validation precedes RL. The current phase is running enforced topology experiments with validated behavioral dimensions.
 
 ## Coordination Patterns
 
