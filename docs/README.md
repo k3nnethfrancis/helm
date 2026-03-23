@@ -18,4 +18,4 @@ Key source files:
 - `src/helm/matrix_families.py` — topology families, rules, prompts
 - `src/helm/agent_cli.py` — helm-agent coordination CLI
 - `src/helm/topology_compliance.py` — compliance analysis
-- `configs/examples/` — runnable experiment configs
+- `configs/` — runnable experiment configs

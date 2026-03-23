@@ -87,7 +87,6 @@ class TestExampleConfigsHaveDisallowedTools:
         config_path = (
             Path(__file__).resolve().parents[1]
             / "configs"
-            / "examples"
             / "centralized-5.yaml"
         )
         config = ExperimentConfig.from_yaml(config_path)
@@ -101,7 +100,6 @@ class TestExampleConfigsHaveDisallowedTools:
         config_path = (
             Path(__file__).resolve().parents[1]
             / "configs"
-            / "examples"
             / "single-agent.yaml"
         )
         config = ExperimentConfig.from_yaml(config_path)
@@ -114,7 +112,6 @@ class TestExampleConfigsHaveDisallowedTools:
         config_path = (
             Path(__file__).resolve().parents[1]
             / "configs"
-            / "examples"
             / "delegating-1.yaml"
         )
         config = ExperimentConfig.from_yaml(config_path)

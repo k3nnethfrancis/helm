@@ -3,7 +3,7 @@
 # All native coordination tools blocked — agents use filesystem protocol.
 #
 # Usage:
-#   helm benchmark run configs/examples/centralized-5.yaml -n 1 --direct-cli --on-turn-limit end
+#   helm benchmark run configs/centralized-5.yaml -n 1 --direct-cli --on-turn-limit end
 
 name: centralized-5-example
 

@@ -1,18 +1,18 @@
 # Helm Configs
 
-## Example Configs (`examples/`)
+## Configs
 
 Standalone experiment configs. Each file defines one complete experiment: agents, topology, limits, benchmark, and evaluation dimensions.
 
 ```bash
 # Run a single-agent experiment on one SWE-bench task
-helm benchmark run configs/examples/single-agent.yaml -n 1 --direct-cli --on-turn-limit end
+helm benchmark run configs/single-agent.yaml -n 1 --direct-cli --on-turn-limit end
 
 # Run a centralized 5-agent swarm
-helm benchmark run configs/examples/centralized-5.yaml -n 1 --direct-cli --on-turn-limit end
+helm benchmark run configs/centralized-5.yaml -n 1 --direct-cli --on-turn-limit end
 
 # Run a delegating agent that can spawn subagents
-helm benchmark run configs/examples/delegating-1.yaml -n 1 --direct-cli --on-turn-limit end
+helm benchmark run configs/delegating-1.yaml -n 1 --direct-cli --on-turn-limit end
 ```
 
 ### Writing your own config

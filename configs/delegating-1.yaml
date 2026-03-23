@@ -3,7 +3,7 @@
 # Native Agent tool is NOT blocked; TeamCreate and SendMessage are.
 #
 # Usage:
-#   helm benchmark run configs/examples/delegating-1.yaml -n 1 --direct-cli --on-turn-limit end
+#   helm benchmark run configs/delegating-1.yaml -n 1 --direct-cli --on-turn-limit end
 
 name: delegating-1-example
 
