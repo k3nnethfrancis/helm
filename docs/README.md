@@ -13,9 +13,10 @@ Reference:
 - `monitoring-evasion-design.md` — paired-run design for monitoring evasion (deferred)
 - `resources.md` — external references and related work
 
-Key source files:
-- `src/helm/cli.py` — main command surface
-- `src/helm/matrix_families.py` — topology families, rules, prompts
+Key source packages:
+- `src/helm/adapters/` — harness adapters (Claude, Codex, OpenCode) + DirectCLI client
+- `src/helm/judge/` — behavioral judge (backends, scoring, hierarchical strategy)
+- `src/helm/topologies/` — topology families, enforcement rules, prompt templates
 - `src/helm/agent_cli.py` — helm-agent coordination CLI
 - `src/helm/topology_compliance.py` — compliance analysis
 - `configs/` — runnable experiment configs

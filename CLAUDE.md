@@ -27,18 +27,15 @@ The current priority is **topology enforcement and repo cleanup before the next 
 
 ### Where We Are (2026-03-22)
 
-**Critical finding:** Topology compliance analysis of the broader_panel corpus (24 runs) revealed that agents systematically violate prescribed topologies:
-- **All 16 multi-agent runs** spawned subagents via Claude Code's native `Agent` tool (38 total spawns)
-- **Even 2/8 single-agent runs** used `Agent` tool for delegation
-- Centralized coordinators used `SendMessage` (9 times) instead of the filesystem protocol
-- **Result: prior topology comparisons are confounded.** "Centralized" was actually "centralized + hidden subagents." Task score differences cannot be attributed to topology alone.
+**Repo is clean, refactored, and enforcement-ready.**
 
-**The fix:** Mechanical tool enforcement, not prompt steering.
-- Claude Code supports `--disallowedTools` to block `Agent`, `TeamCreate`, `SendMessage`
-- Helm needs a controlled alternative: a Helm CLI/tool that agents call to coordinate, with topology rules enforced at the tool level
-- This is the prerequisite for valid topology experiments
-
-### What's Validated (Still Good)
+Completed this session:
+- Source refactored: 3 monolithic files → 3 subpackages (`adapters/`, `judge/`, `topologies/`)
+- Topology enforcement built and verified: `--disallowedTools` + `helm-agent` CLI → 1.00 compliance on test run
+- Topology-adherence judge dimension added (8th dimension)
+- Repo restructured: `configs/` (4 topology YAMLs), `experiments/` (tracked, numbered), `runs/` (gitignored)
+- Stale code deleted: 22 patterns, 6 scripts, 2 docs, tracked experiment data
+- Experiment 001 scaffolded
 
 **Judge dimensions (J4 post-hardening, 2026-03-21):**
 - `escalation-calibration` — 100% counterparty agreement
@@ -46,23 +43,27 @@ The current priority is **topology enforcement and repo cleanup before the next 
 - `human-model-accuracy` — 67% counterparty agreement
 - `context-degradation` — 67% (soft signal)
 - `resource-waste` — 33% (soft signal)
+- `topology-adherence` — new, needs J4 validation
 - `failure-suppression` — excluded (0% agreement)
 
-**Topology compliance analyzer** (`src/helm/topology_compliance.py`): extracts tool usage, subagent spawns, messaging patterns, and filesystem coordination from transcripts. Produces per-agent and per-experiment compliance scores.
+### Immediate Next Steps
 
-### What's Invalid (Needs Re-Run After Enforcement)
+1. **Run experiment 001** (topology enforcement baseline): 4 topologies × 8 SWE-bench tasks with mechanical enforcement
+2. **Validate topology-adherence dimension** via cross-judge counterparty comparison
+3. **Run Codex mirror** when budget available — head-to-head Claude vs Codex comparison
+4. **Blog post** reporting which agents and topologies produce better multi-agent coordination
 
-- All prior topology comparison results (size ladder, broader panel)
-- The `benchmark-flat / behavior-different` narrative is still directionally suggestive but not cleanly attributable to topology
-- The broader_panel wave needs to be re-run after enforcement is implemented
+### Medium-Term
 
-### Next Sequence
+5. **RL pilot** — closure-first reward on centralized@5, gated on clean experiment data
+6. **Terminal-Bench integration** — second benchmark substrate (ICLR 2026, 89 CLI tasks)
+7. **Prompt template extraction** — move 600+ lines of f-strings from prompts.py to .md template files
 
-1. **Build topology enforcement layer** — Helm CLI tool + `--disallowedTools` integration in adapters
-2. **Clean the repo for sharing** — delete stale patterns, gitignore experiments, document topology designs
-3. **Re-run broader_panel** with mechanical enforcement + compliance verification
-4. **Run Codex mirror** when budget available
-5. **Blog post** gated on clean, enforced, compliance-verified data
+### Long-Term Vision
+
+Helm exists to answer: **How do humans understand and stay in control of multi-agent AI systems?**
+
+The research arc is: measure coordination quality → validate measurement instruments → identify trainable signals → optimize agents to coordinate better while remaining steerable. The current phase (measure + validate) feeds the downstream phase (train). Everything in Helm — the topologies, dimensions, enforcement, compliance analysis — is infrastructure for producing reliable training signals for multi-agent coordination under human control.
 
 ### Key Synthesis Artifacts
 
@@ -168,32 +169,35 @@ Topologies are mechanically enforced, not just prompt-steered:
 
 ```text
 helm/
-├── CLAUDE.md             # You are here
-├── README.md             # Public-facing overview
-├── pyproject.toml        # Package config (hatchling build)
-├── src/helm/             # Source package
-│   ├── __init__.py
-│   ├── cli.py            # Main Typer command surface
-│   ├── cli_shared.py     # Shared CLI helpers (paths, escalation, turn limits, output)
-│   ├── cli_benchmark.py  # Benchmark/report/export CLI implementation helpers
-│   ├── agent_cli.py      # Helm-controlled coordination CLI (send/inbox/status/spawn)
-│   ├── collector.py      # Event aggregation and transcript generation
-│   ├── config.py         # Pydantic models for experiment YAML config
-│   ├── experiment.py     # Experiment lifecycle management
-│   ├── judge.py          # Multi-backend judge (Claude/Codex headless + OpenRouter)
-│   ├── matrix.py         # Matrix manifest loading, generation flow, and analysis
-│   ├── matrix_families.py # Architecture families, topology rules, prompts, coordination defs
-│   ├── runtime_guard.py  # Rule-based intervention engine
-│   ├── run_data.py       # Run-data contract + orchestration evals
-│   ├── sdk.py            # DirectCLI client + harness adapters (Claude, Codex, OpenCode)
-│   └── topology_compliance.py  # Deterministic topology compliance analysis
-├── configs/              # Runnable topology configs (single, centralized, hybrid, delegating)
-├── docs/                 # Active documentation
-├── judges/               # Dimension scoring rubrics (7 active + 1 excluded)
-├── experiments/          # Curated experiment results (tracked, numbered)
-├── scripts/              # Pipeline scripts (generate → run → analyze + judge comparison)
-├── data/                 # Benchmark datasets (gitignored)
-└── bin/                  # SDK binary
+├── src/helm/
+│   ├── adapters/            # Harness adapters (Claude, Codex, OpenCode) + DirectCLI client
+│   ├── judge/               # Behavioral judge (backends, scoring, hierarchical strategy)
+│   ├── topologies/          # Topology families, enforcement rules, prompt templates
+│   ├── benchmarks/          # Benchmark adapters (SWE-bench), verification, export
+│   ├── coordination/        # Inter-agent coordination backends (filesystem)
+│   ├── cli.py               # Main Typer CLI
+│   ├── agent_cli.py         # helm-agent coordination CLI (send/inbox/status/spawn)
+│   ├── config.py            # Pydantic experiment config models
+│   ├── experiment.py        # Experiment lifecycle
+│   ├── topology_compliance.py  # Deterministic compliance analysis
+│   ├── matrix.py            # Matrix manifest generation + analysis
+│   ├── collector.py         # Event aggregation + transcript rendering
+│   ├── run_data.py          # Run-data contract + orchestration evals
+│   ├── runtime_guard.py     # Rule-based intervention engine
+│   ├── sdk.py               # Re-export shim → adapters/
+│   └── matrix_families.py   # Re-export shim → topologies/
+├── configs/                 # Runnable topology configs (ship with Helm)
+│   ├── single-agent.yaml
+│   ├── centralized-5.yaml
+│   ├── hybrid-5.yaml
+│   └── delegating-1.yaml
+├── judges/                  # Behavioral dimension rubrics (7 active + 1 excluded)
+├── experiments/             # Curated experiment results (tracked, numbered)
+├── scripts/                 # Pipeline scripts (generate → run → analyze)
+├── tests/                   # Test suite
+├── docs/                    # Documentation
+├── runs/                    # Raw experiment data (gitignored)
+└── data/                    # Benchmark datasets (gitignored)
 ```
 
 ## How to Work on This Project
@@ -232,12 +236,12 @@ python scripts/analyze_experiment_matrix.py experiments/benchmark-runs/<summary1
 
 ### Adding a New Topology Family
 
-1. Add layouts to `FAMILY_LAYOUTS` in `src/helm/matrix_families.py`
-2. Add topology rules to `TOPOLOGY_RULES` (which tools to block per role)
-3. Add coordination label to `COORDINATION_FAMILY_LABELS`
-4. Add supported sizes to `SUPPORTED_FAMILY_SIZES`
-5. Write system prompts for each role in `build_prompt()`
-6. Add tool instructions via `build_tool_instructions()`
+1. Add layouts to `FAMILY_LAYOUTS` in `src/helm/topologies/families.py`
+2. Add topology rules to `TOPOLOGY_RULES` in `src/helm/topologies/rules.py`
+3. Add coordination label to `COORDINATION_FAMILY_LABELS` in `families.py`
+4. Add supported sizes to `SUPPORTED_FAMILY_SIZES` in `families.py`
+5. Write system prompts for each role in `src/helm/topologies/prompts.py`
+6. Create a config YAML in `configs/` for the new topology
 
 ## Design Principles
 
