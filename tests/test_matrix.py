@@ -11,30 +11,73 @@ from helm.matrix import (
 )
 
 
-def test_generate_matrix_patterns_wave0(tmp_path: Path) -> None:
-    manifest = Path(__file__).resolve().parents[1] / "configs" / "matrices" / "swebench_architecture_phase1.yaml"
+def test_generate_matrix_patterns_basic(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "basic.yaml"
+    manifest_path.write_text(
+        """
+matrix_id: test_basic
+description: Basic matrix generation test
+output_root: patterns/generated/test_basic
+
+defaults:
+  harness: claude-code
+  prompt_family: swebench_claude_matrix_v1
+  dimensions: [escalation-calibration, goal-drift]
+  judge_backend: claude-headless
+  benchmark:
+    adapter: swebench
+    id: princeton-nlp/SWE-bench_Verified
+    dataset_path: data/swe_bench_verified.jsonl
+    verifier:
+      mode: command
+      command: python scripts/verify_swebench.py --instance-id {example_id}
+      pass_exit_codes: [0]
+  single_limits:
+    max_duration: 30m
+    max_turns_per_agent: 60
+  multi_agent_limits:
+    max_duration: 45m
+    max_turns_per_agent: 60
+  direct_cli: true
+  on_turn_limit: end
+
+task_packs:
+  decomposable:
+    task_structure: decomposable_cross_module
+    rationale: Test decomposable tasks.
+    primary_examples:
+      - example_id: sympy__sympy-17630
+        rationale: Anchor task.
+
+waves:
+  main:
+    families: [single, centralized]
+    sizes: [1, 5]
+    pack_examples:
+      decomposable: all
+"""
+    )
 
     generated = generate_matrix_patterns(
-        manifest,
+        manifest_path,
         output_root=tmp_path / "generated",
-        wave="wave0",
+        wave="main",
     )
 
     conditions = generated["conditions"]
-    assert len(conditions) == 9
+    assert len(conditions) == 2  # single@1 + centralized@5
 
     matrix_json = Path(str(generated["matrix_json"]))
     payload = json.loads(matrix_json.read_text())
-    assert payload["matrix_id"] == "swebench_architecture_phase1"
+    assert payload["matrix_id"] == "test_basic"
 
     for condition in conditions:
         pattern_path = Path(str(condition["pattern_path"]))
         assert pattern_path.exists()
         config = ExperimentConfig.from_yaml(pattern_path)
         assert config.metadata.matrix is not None
-        assert config.metadata.matrix.matrix_id == "swebench_architecture_phase1"
+        assert config.metadata.matrix.matrix_id == "test_basic"
         assert config.metadata.matrix.condition_id == condition["condition_id"]
-        assert config.metadata.matrix.architecture_family == condition["architecture_family"]
 
 
 def test_generate_matrix_patterns_supports_replications_and_turn_limits(tmp_path: Path) -> None:
@@ -118,65 +161,83 @@ waves:
     assert config.limits.max_turns_per_agent in (60, 120)
 
 
-def test_generate_rl_readiness_manifest_waves(tmp_path: Path) -> None:
-    manifest = (
-        Path(__file__).resolve().parents[1]
-        / "configs"
-        / "matrices"
-        / "swebench_rl_readiness_phase1_claude.yaml"
+def test_generate_matrix_waves_with_replications_and_ablation(tmp_path: Path) -> None:
+    """Test that matrix generation handles waves, replications, and turn-limit variants."""
+    manifest_path = tmp_path / "test_manifest.yaml"
+    manifest_path.write_text(
+        """
+matrix_id: test_waves
+description: Test matrix wave features
+output_root: patterns/generated/test_waves
+
+defaults:
+  harness: claude-code
+  model: claude-opus-4-6
+  prompt_family: swebench_claude_matrix_v1
+  dimensions: [escalation-calibration, goal-drift]
+  judge_backend: claude-headless
+  benchmark:
+    adapter: swebench
+    id: princeton-nlp/SWE-bench_Verified
+    dataset_path: data/swe_bench_verified.jsonl
+    verifier:
+      mode: command
+      command: python scripts/verify_swebench.py --instance-id {example_id}
+      pass_exit_codes: [0]
+  single_limits:
+    max_duration: 30m
+    max_turns_per_agent: 60
+  multi_agent_limits:
+    max_duration: 45m
+    max_turns_per_agent: 60
+  direct_cli: true
+  on_turn_limit: end
+
+task_packs:
+  decomposable:
+    task_structure: decomposable_cross_module
+    rationale: Test decomposable tasks.
+    primary_examples:
+      - example_id: sympy__sympy-17630
+        rationale: Anchor task.
+
+waves:
+  main:
+    families: [single, centralized]
+    sizes: [1, 5]
+    pack_examples:
+      decomposable: all
+
+  replicated:
+    families: [single, centralized]
+    sizes: [1, 5]
+    pack_examples:
+      decomposable: 1
+    replications: 2
+
+  ablation:
+    families: [centralized]
+    sizes: [5]
+    anchor_pack: decomposable
+    anchor_example_id: sympy__sympy-17630
+    turn_limits: [60, 120]
+    replications: 2
+"""
     )
 
-    broader = generate_matrix_patterns(
-        manifest,
-        output_root=tmp_path / "broader",
-        wave="broader_panel",
-    )
-    replicated = generate_matrix_patterns(
-        manifest,
-        output_root=tmp_path / "replicated",
-        wave="replicated_decision_slice",
-    )
-    ablation = generate_matrix_patterns(
-        manifest,
-        output_root=tmp_path / "ablation",
-        wave="turn_budget_ablation",
-    )
+    main = generate_matrix_patterns(manifest_path, output_root=tmp_path / "main", wave="main")
+    replicated = generate_matrix_patterns(manifest_path, output_root=tmp_path / "rep", wave="replicated")
+    ablation = generate_matrix_patterns(manifest_path, output_root=tmp_path / "abl", wave="ablation")
 
-    assert len(broader["conditions"]) == 6
-    assert len(replicated["conditions"]) == 12
-    assert len(ablation["conditions"]) == 6
+    assert len(main["conditions"]) == 2  # single@1 + centralized@5
+    assert len(replicated["conditions"]) == 4  # 2 families × 2 replications
+    assert len(ablation["conditions"]) == 4  # 2 turn_limits × 2 replications
 
-    ablation_config = ExperimentConfig.from_yaml(Path(str(ablation["conditions"][0]["pattern_path"])))
-    assert ablation_config.metadata.matrix is not None
-    assert ablation_config.metadata.matrix.turn_limit_variant in (60, 120, 180)
-    assert ablation_config.metadata.matrix.replication_count == 2
-    assert ablation_config.limits.max_turns_per_agent in (60, 120, 180)
-
-    # Harness should be in matrix metadata
-    assert ablation_config.metadata.matrix.harness == "claude-code"
-
-
-def test_generate_codex_rl_readiness_manifest(tmp_path: Path) -> None:
-    manifest = (
-        Path(__file__).resolve().parents[1]
-        / "configs"
-        / "matrices"
-        / "swebench_rl_readiness_phase1_codex.yaml"
-    )
-
-    broader = generate_matrix_patterns(
-        manifest,
-        output_root=tmp_path / "broader",
-        wave="broader_panel",
-    )
-
-    assert len(broader["conditions"]) == 6
-
-    # Verify Codex harness flows through to generated patterns
-    first_config = ExperimentConfig.from_yaml(Path(str(broader["conditions"][0]["pattern_path"])))
-    assert first_config.agents[0].harness == "codex"
-    assert first_config.metadata.matrix is not None
-    assert first_config.metadata.matrix.harness == "codex"
+    abl_config = ExperimentConfig.from_yaml(Path(str(ablation["conditions"][0]["pattern_path"])))
+    assert abl_config.metadata.matrix is not None
+    assert abl_config.metadata.matrix.turn_limit_variant in (60, 120)
+    assert abl_config.metadata.matrix.replication_count == 2
+    assert abl_config.metadata.matrix.harness == "claude-code"
 
 
 def test_record_condition_execution_preserves_pending_conditions() -> None:

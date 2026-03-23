@@ -18,8 +18,8 @@ bin/
 # macOS
 .DS_Store
 
-# Experiment run artifacts
-experiments/
+# Raw experiment run data (large, iterative — not for sharing)
+runs/
 
 # Internal planning docs and review artifacts
 plan.md
@@ -38,6 +38,3 @@ data/
 
 # Eval output artifacts
 outputs/
-
-# Generated experiment patterns (derive from matrix manifests; do not treat as source)
-patterns/generated/

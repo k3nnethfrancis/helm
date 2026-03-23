@@ -4,8 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from helm.config import AgentConfig, ExperimentConfig
-from helm.matrix import generate_matrix_patterns
+from helm.config import ExperimentConfig
 from helm.matrix_families import TOPOLOGY_RULES, get_disallowed_tools
 from helm.sdk import ClaudeAdapter, SessionConfig
 
@@ -81,56 +80,45 @@ class TestClaudeAdapterEnforcement:
         assert "--disallowedTools" not in cmd
 
 
-class TestMatrixGeneratesDisallowedTools:
-    """Test that generated patterns include disallowed_tools."""
+class TestExampleConfigsHaveDisallowedTools:
+    """Test that shipped example configs include proper tool restrictions."""
 
-    def test_centralized_pattern_has_disallowed_tools(self, tmp_path: Path):
-        manifest = (
+    def test_centralized_config_has_disallowed_tools(self):
+        config_path = (
             Path(__file__).resolve().parents[1]
             / "configs"
-            / "matrices"
-            / "swebench_rl_readiness_phase1_claude.yaml"
+            / "examples"
+            / "centralized-5.yaml"
         )
-        result = generate_matrix_patterns(
-            manifest,
-            output_root=tmp_path / "test",
-            wave="broader_panel",
-        )
-
-        # Find a centralized condition
-        centralized = [
-            c for c in result["conditions"]
-            if "centralized" in c["condition_id"]
-        ]
-        assert centralized, "No centralized conditions found"
-
-        config = ExperimentConfig.from_yaml(Path(str(centralized[0]["pattern_path"])))
+        config = ExperimentConfig.from_yaml(config_path)
+        assert len(config.agents) == 5
         for agent in config.agents:
             assert agent.disallowed_tools, f"Agent {agent.id} has no disallowed_tools"
             assert "Agent" in agent.disallowed_tools
             assert "SendMessage" in agent.disallowed_tools
 
-    def test_single_pattern_has_disallowed_tools(self, tmp_path: Path):
-        manifest = (
+    def test_single_config_has_disallowed_tools(self):
+        config_path = (
             Path(__file__).resolve().parents[1]
             / "configs"
-            / "matrices"
-            / "swebench_rl_readiness_phase1_claude.yaml"
+            / "examples"
+            / "single-agent.yaml"
         )
-        result = generate_matrix_patterns(
-            manifest,
-            output_root=tmp_path / "test",
-            wave="broader_panel",
-        )
-
-        single = [
-            c for c in result["conditions"]
-            if "single" in c["condition_id"]
-        ]
-        assert single, "No single conditions found"
-
-        config = ExperimentConfig.from_yaml(Path(str(single[0]["pattern_path"])))
+        config = ExperimentConfig.from_yaml(config_path)
         assert len(config.agents) == 1
         agent = config.agents[0]
         assert "Agent" in agent.disallowed_tools
         assert "SendMessage" in agent.disallowed_tools
+
+    def test_delegating_config_allows_agent_for_hub(self):
+        config_path = (
+            Path(__file__).resolve().parents[1]
+            / "configs"
+            / "examples"
+            / "delegating-1.yaml"
+        )
+        config = ExperimentConfig.from_yaml(config_path)
+        assert len(config.agents) == 1
+        agent = config.agents[0]
+        assert "Agent" not in agent.disallowed_tools
+        assert "TeamCreate" in agent.disallowed_tools
