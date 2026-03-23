@@ -27,8 +27,8 @@ from helm.matrix_families import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_GENERATED_ROOT = REPO_ROOT / "patterns" / "generated"
-DEFAULT_EXPERIMENTS_DIR = REPO_ROOT / "experiments"
+DEFAULT_GENERATED_ROOT = REPO_ROOT / "runs" / "generated"
+DEFAULT_EXPERIMENTS_DIR = REPO_ROOT / "runs"
 ACTIVE_DIMENSIONS = [
     "escalation-calibration",
     "goal-drift",

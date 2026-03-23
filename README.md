@@ -171,37 +171,20 @@ curl -fsSL https://releases.rivet.dev/sandbox-agent/latest/install.sh | sh
 ### Run an Experiment
 
 ```bash
-# Validate a pattern config
-helm validate patterns/experiment-peer-penguins.yaml
+# Run a single-agent experiment on one SWE-bench task
+helm benchmark run configs/single-agent.yaml -n 1 --direct-cli --on-turn-limit end
 
-# Run an experiment
-helm run patterns/experiment-peer-penguins.yaml \
-  --task "Analyze the Palmer Penguins dataset: EDA, model, review" \
-  --direct-cli \
-  --on-turn-limit continue
+# Run a centralized 5-agent swarm
+helm benchmark run configs/centralized-5.yaml -n 1 --direct-cli --on-turn-limit end
+
+# Run a delegating agent (can spawn subagents)
+helm benchmark run configs/delegating-1.yaml -n 1 --direct-cli --on-turn-limit end
+
+# Judge an experiment on behavioral dimensions
+helm judge <experiment-id> -b claude-headless -m claude-sonnet-4-6
 
 # List past experiments
 helm list
-
-# Judge an experiment on specific dimensions
-helm judge <experiment-id> \
-  --dimensions resource-waste,context-degradation,escalation-calibration,goal-drift
-
-# Analyze results
-helm analyze <experiment-id>
-```
-
-### Benchmark Mode
-
-```bash
-# List installed benchmark adapters
-helm benchmark adapters
-
-# Preview examples for a pattern
-helm benchmark preview patterns/benchmark-swebench-template.yaml -n 5
-
-# Run sampled benchmark experiments
-helm benchmark run patterns/benchmark-swebench-single-claude.yaml -n 10 --seed 42 --direct-cli
 
 # Generate baseline report
 helm benchmark report experiments/benchmark-runs/<summary>.json
@@ -315,14 +298,13 @@ The `experiments/hub-spoke-parallel-build-c2e0a21d/` directory contains a comple
 
 ```
 helm/
-├── src/helm/              # Runtime, benchmark, judge, export, CLI code
-├── tests/                 # Regression coverage for the active stack
-├── patterns/              # Hand-authored experiment patterns
+├── src/helm/              # Source code
+├── tests/                 # Test suite
+├── configs/               # Runnable topology configs (single, centralized, hybrid, delegating)
 ├── judges/                # Behavioral dimension rubrics
-├── configs/               # Matrix manifests
-├── docs/                  # Small active doc set
-├── scripts/               # Matrix/judge/benchmark support scripts
-├── experiments/           # Run artifacts (not source)
+├── experiments/           # Curated experiment results (tracked, numbered)
+├── docs/                  # Documentation
+├── scripts/               # Pipeline scripts
 └── data/                  # Benchmark datasets (gitignored)
 ```
 

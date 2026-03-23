@@ -82,9 +82,9 @@ The Helm context system now has four layers:
 The matrix workflow now also has a repo-local skill:
 - `.claude/skills/helm-matrix-generation/SKILL.md`
 
-Generated matrix patterns under `patterns/generated/` are runtime artifacts, not
-source of truth. The source of truth for matrix conditions is the manifest in
-`configs/matrices/`.
+Matrix manifests generate experiment patterns into `runs/generated/` (gitignored).
+The source of truth for experiments is `configs/` (standalone configs) or matrix
+manifests in your experiment directory.
 
 The repo is intentionally narrower than earlier phases:
 - no active Prime RL environment layer inside Helm
@@ -187,11 +187,10 @@ helm/
 │   ├── run_data.py       # Run-data contract + orchestration evals
 │   ├── sdk.py            # DirectCLI client + harness adapters (Claude, Codex, OpenCode)
 │   └── topology_compliance.py  # Deterministic topology compliance analysis
-├── configs/matrices/     # Matrix manifests (source of truth for experiments)
-├── docs/                 # Small active doc set
-├── judges/               # Dimension scoring rubrics (5 active + 1 excluded)
-├── patterns/generated/   # Generated matrix outputs (runtime artifacts, gitignored)
-├── experiments/          # Experiment run data (gitignored)
+├── configs/              # Runnable topology configs (single, centralized, hybrid, delegating)
+├── docs/                 # Active documentation
+├── judges/               # Dimension scoring rubrics (7 active + 1 excluded)
+├── experiments/          # Curated experiment results (tracked, numbered)
 ├── scripts/              # Pipeline scripts (generate → run → analyze + judge comparison)
 ├── data/                 # Benchmark datasets (gitignored)
 └── bin/                  # SDK binary
@@ -212,13 +211,11 @@ helm/
 uv pip install -e .
 
 # Generate experiment patterns from a matrix manifest
-python scripts/generate_experiment_matrix.py configs/matrices/<manifest>.yaml --wave <wave>
+# Run a single topology config on one SWE-bench task
+helm benchmark run configs/centralized-5.yaml -n 1 --direct-cli --on-turn-limit end
 
-# Run a benchmark wave (generates, runs, verifies, and judges)
-python scripts/run_experiment_matrix.py configs/matrices/<manifest>.yaml --wave <wave>
-
-# Or run a single generated pattern
-helm benchmark run patterns/generated/<matrix>/<pattern>.yaml -n 4 --on-turn-limit end --direct-cli
+# Run a matrix manifest (batch experiments)
+python scripts/run_experiment_matrix.py <manifest>.yaml --wave <wave>
 
 # Score a completed experiment
 helm judge <experiment-id> -b claude-headless -m claude-sonnet-4-6
