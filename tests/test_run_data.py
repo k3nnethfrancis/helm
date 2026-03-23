@@ -54,14 +54,130 @@ def _sample_transcript() -> dict:
         },
         "coordination_summary": {
             "total_messages": 2,
+            "observed_messages": 2,
+            "file_backed_messages": 2,
+            "nudge_attempts": 2,
             "delivered": 2,
             "delivery_rate": 1.0,
+            "nudge_delivery_rate": 1.0,
             "by_type": {"peer_message": 2},
+            "by_channel": {"persistent_peer_messages": 2},
+            "by_medium": {"filesystem": 2},
+            "by_persistence": {"persistent": 2},
+            "by_scope": {"mixed": 2},
+            "by_delivery_status": {"delivered": 2},
+            "by_observed_via": {"filesystem_poll": 2},
+            "recipient_activity_checks": 2,
+            "recipient_activity_hits": 2,
+            "recipient_activity_rate": 1.0,
+            "messages_with_any_recipient_activity": 2,
+            "messages_without_recipient_activity": 0,
         },
         "coordination_messages": [
-            {"source_path": "messages/001-a-b.md"},
-            {"source_path": "messages/002-b-a.md"},
+            {
+                "timestamp": "2026-02-11T10:00:00.750000",
+                "sender": "a",
+                "recipient": "b",
+                "message_type": "peer_message",
+                "source_path": "messages/001-a-b.md",
+                "channel_id": "persistent_peer_messages",
+                "channel_medium": "filesystem",
+                "channel_persistence": "persistent",
+                "channel_scope": "mixed",
+                "observed_via": "filesystem_poll",
+                "nudge_text": "notify a->b",
+                "metadata": {"delivery_attempted_to": ["b"]},
+                "delivered": True,
+                "delivery_status": "delivered",
+            },
+            {
+                "timestamp": "2026-02-11T10:00:01.250000",
+                "sender": "b",
+                "recipient": "a",
+                "message_type": "peer_message",
+                "source_path": "messages/002-b-a.md",
+                "channel_id": "persistent_peer_messages",
+                "channel_medium": "filesystem",
+                "channel_persistence": "persistent",
+                "channel_scope": "mixed",
+                "observed_via": "filesystem_poll",
+                "nudge_text": "notify b->a",
+                "metadata": {"delivery_attempted_to": ["a"]},
+                "delivered": True,
+                "delivery_status": "delivered",
+            },
         ],
+    }
+
+
+def _sample_direct_cli_transcript() -> dict:
+    return {
+        "start_time": "2026-03-07T10:00:00",
+        "end_time": "2026-03-07T10:00:06",
+        "total_items": 9,
+        "agents": {
+            "a": {
+                "item_count": 5,
+                "items": [
+                    {
+                        "timestamp": "2026-03-07T10:00:00",
+                        "event_type": "session.started",
+                        "data": {},
+                    },
+                    {
+                        "timestamp": "2026-03-07T10:00:01",
+                        "event_type": "item.completed",
+                        "data": {
+                            "item": {"role": "assistant"},
+                            "raw": {"message": {"id": "msg-a1"}},
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-07T10:00:03",
+                        "event_type": "item.completed",
+                        "data": {
+                            "item": {"role": "assistant"},
+                            "raw": {"message": {"id": "msg-a1"}},
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-07T10:00:04",
+                        "event_type": "item.completed",
+                        "data": {
+                            "item": {"role": "user"},
+                            "raw": {"uuid": "tool-result-a1"},
+                        },
+                    },
+                    {
+                        "timestamp": "2026-03-07T10:00:06",
+                        "event_type": "item.completed",
+                        "data": {
+                            "item": {"role": "assistant"},
+                            "raw": {"message": {"id": "msg-a2"}},
+                        },
+                    },
+                ],
+            },
+            "b": {
+                "item_count": 4,
+                "items": [
+                    {
+                        "timestamp": "2026-03-07T10:00:00.500000",
+                        "event_type": "session.started",
+                        "data": {},
+                    },
+                    {
+                        "timestamp": "2026-03-07T10:00:04",
+                        "event_type": "item.completed",
+                        "data": {
+                            "item": {"role": "assistant"},
+                            "raw": {"message": {"id": "msg-b1"}},
+                        },
+                    },
+                ],
+            },
+        },
+        "coordination_messages": [],
     }
 
 
@@ -70,6 +186,16 @@ def _sample_metadata() -> dict:
         "experiment_id": "exp-1",
         "experiment_name": "exp-1",
         "pattern": "peer-network",
+        "matrix": {
+            "matrix_id": "phase1",
+            "condition_id": "wave0-decentralized-2",
+            "architecture_family": "decentralized",
+            "swarm_size": 2,
+            "task_pack": "decomposable_cross_module",
+            "task_structure": "decomposable_cross_module",
+            "prompt_family": "swebench_claude_matrix_v1",
+            "coordination_family": "peer_network_v1",
+        },
         "created_at": "2026-02-11T10:00:00",
         "task": "sample task",
         "benchmark": {
@@ -86,7 +212,11 @@ def _sample_metadata() -> dict:
         "limits": {"blocked_commands": ["rm -rf", "sudo"]},
         "run": {
             "success": True,
+            "outcome": "completed",
+            "termination_reason": "completion_signal",
+            "system_failure": False,
             "duration_seconds": 3.0,
+            "message": "Run reached completion signals.",
             "benchmark": {
                 "adapter": "swebench",
                 "benchmark_id": "princeton-nlp/SWE-bench_Verified",
@@ -163,6 +293,17 @@ def test_compute_orchestration_evals(tmp_path) -> None:
 
     overhead = metrics["coordination_overhead"]
     assert overhead["coordination_messages"] == 2
+    assert overhead["observed_coordination_artifacts"] == 2
+    assert overhead["file_backed_messages"] == 2
+    assert overhead["nudge_attempts"] == 2
+    assert overhead["nudge_delivery_rate"] == 1.0
+    assert overhead["recipient_activity_checks"] == 2
+    assert overhead["recipient_activity_hits"] == 2
+    assert overhead["recipient_activity_rate"] == 1.0
+    assert overhead["messages_with_any_recipient_activity"] == 2
+    assert overhead["by_channel"]["persistent_peer_messages"] == 2
+    assert overhead["by_medium"]["filesystem"] == 2
+    assert overhead["by_delivery_status"]["delivered"] == 2
     assert overhead["workspace_artifacts"] == 1
     assert overhead["messages_per_assistant_step"] == 1.0
 
@@ -181,6 +322,25 @@ def test_compute_orchestration_evals(tmp_path) -> None:
     assert intervention_profile["by_agent"]["a"] == 2
 
 
+def test_compute_orchestration_evals_infers_direct_cli_intervals(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    metrics = compute_orchestration_evals(
+        transcript=_sample_direct_cli_transcript(),
+        metadata=_sample_metadata(),
+        experiment_dir=tmp_path,
+    )
+
+    parallel = metrics["parallelism_efficiency"]
+    assert parallel["assistant_steps"] == 3
+    assert parallel["assistant_active_seconds"] == 8.5
+    assert parallel["wall_clock_seconds"] == 6.0
+    assert parallel["critical_path_ratio"] == 6.0 / 8.5
+    assert round(parallel["value"], 4) == round(1.0 - (6.0 / 8.5), 4)
+    assert round(parallel["avg_parallel_agents"], 4) == round(8.5 / 6.0, 4)
+
+
 def test_save_run_data_includes_judge_scores(tmp_path) -> None:
     experiment_dir = tmp_path / "exp-1"
     transcripts_dir = experiment_dir / "transcripts"
@@ -194,8 +354,10 @@ def test_save_run_data_includes_judge_scores(tmp_path) -> None:
     transcript = _sample_transcript()
     scores = {
         "experiment_id": "exp-1",
-        "judge_backend": "sdk",
+        "judge_backend": "claude-headless",
         "judge_model": None,
+        "judge_role": "primary",
+        "preparation_path": "single-pass",
         "scores": [
             {
                 "dimension": "goal-drift",
@@ -231,9 +393,28 @@ def test_save_run_data_includes_judge_scores(tmp_path) -> None:
     assert out_path.name == "run_data.json"
     assert payload["schema_version"] == "helm.run_data.v1"
     assert payload["experiment"]["id"] == "exp-1"
+    assert payload["experiment"]["matrix"]["architecture_family"] == "decentralized"
+    assert payload["run"]["outcome"] == "completed"
+    assert payload["run"]["termination_reason"] == "completion_signal"
+    assert payload["run"]["system_failure"] is False
     assert payload["evals"]["judge"]["scores"]["goal-drift"] == 7
+    assert payload["evals"]["judge"]["backend"] == "claude-headless"
+    assert payload["evals"]["judge"]["role"] == "primary"
+    assert payload["evals"]["judge"]["preparation_path"] == "single-pass"
+    assert payload["config"]["matrix"]["condition_id"] == "wave0-decentralized-2"
     assert payload["transcript"]["total_events"] == 12
+    assert payload["transcript"]["coordination_summary"]["by_medium"]["filesystem"] == 2
+    assert payload["transcript"]["coordination_summary"]["recipient_activity_hits"] == 2
     assert payload["run"]["interventions"][0]["action_taken"] == "escalate"
+    agent_a = next(agent for agent in payload["agents"] if agent["id"] == "a")
+    agent_b = next(agent for agent in payload["agents"] if agent["id"] == "b")
+    assert agent_a["turn_count"] == 1
+    assert agent_a["item_count"] == 6
+    assert agent_a["status"] == "unknown"
+    assert agent_a["done"] is None
+    assert agent_b["turn_count"] == 1
+    assert agent_b["item_count"] == 6
+    assert agent_b["done"] is None
     policy_trace = payload["run"]["orchestration_policy_trace"]
     assert policy_trace["summary"]["total_events"] == 3
     assert policy_trace["summary"]["by_action"]["escalate"] == 1
@@ -241,6 +422,51 @@ def test_save_run_data_includes_judge_scores(tmp_path) -> None:
     assert policy_trace["summary"]["by_action"]["escalate_to_human"] == 1
     assert policy_trace["summary"]["by_action_family"]["escalate"] == 2
     assert policy_trace["summary"]["by_source"]["runtime_guard"] == 2
+
+
+def test_build_run_data_backfills_legacy_turn_limit_outcome(tmp_path) -> None:
+    experiment_dir = tmp_path / "exp-legacy"
+    transcripts_dir = experiment_dir / "transcripts"
+    eval_dir = experiment_dir / "evaluation"
+    transcripts_dir.mkdir(parents=True)
+    eval_dir.mkdir(parents=True)
+
+    metadata = _sample_metadata()
+    metadata["run"]["success"] = False
+    metadata["run"]["duration_seconds"] = 12.0
+    metadata["run"]["error"] = "Turn limit reached; experiment ended before completion."
+    metadata["run"]["agent_stats"] = {"a": {"turns": 50}}
+    metadata["run"].pop("outcome", None)
+    metadata["run"].pop("termination_reason", None)
+    metadata["run"].pop("system_failure", None)
+    metadata["run"].pop("message", None)
+
+    with open(experiment_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+    with open(transcripts_dir / "full.json", "w") as f:
+        json.dump(_sample_transcript(), f)
+    with open(transcripts_dir / "full.md", "w") as f:
+        f.write("# transcript")
+    with open(eval_dir / "task_verification.json", "w") as f:
+        json.dump(
+            {
+                "status": "pass",
+                "score": 1.0,
+                "reason": "All benchmark assertions passed",
+                "details": {"suite": "smoke"},
+            },
+            f,
+        )
+
+    payload = build_run_data(experiment_dir)
+
+    assert payload["run"]["success"] is False
+    assert payload["run"]["outcome"] == "incomplete"
+    assert payload["run"]["termination_reason"] == "turn_limit"
+    assert payload["run"]["system_failure"] is False
+    assert "Turn limit reached" in str(payload["run"]["message"])
+    assert payload["run"]["error"] is None
+    policy_trace = payload["run"]["orchestration_policy_trace"]
     assert policy_trace["summary"]["by_source"]["experiment_escalation"] == 1
     assert policy_trace["events"][0]["action"] == "escalate"
     assert policy_trace["events"][1]["action"] == "escalate_to_human"
@@ -254,6 +480,12 @@ def test_save_run_data_includes_judge_scores(tmp_path) -> None:
     assert payload["run"]["task_verification"]["status"] == "pass"
     assert payload["run"]["task_verification"]["score"] == 1.0
     assert payload["artifacts"]["task_verification"] == "evaluation/task_verification.json"
+    agent_a = next(agent for agent in payload["agents"] if agent["id"] == "a")
+    agent_b = next(agent for agent in payload["agents"] if agent["id"] == "b")
+    assert agent_a["turn_count"] == 50
+    assert agent_a["done"] is None
+    assert agent_b["turn_count"] is None
+    assert agent_b["done"] is None
 
     rebuilt = build_run_data(experiment_dir)
     assert rebuilt["experiment"]["id"] == "exp-1"
@@ -302,6 +534,13 @@ def test_run_data_v2_categorical_scores(tmp_path) -> None:
                 "justification": "All errors reported",
                 "evidence": [],
             },
+            {
+                "dimension": "human-model-accuracy",
+                "category": "accurate",
+                "severity": "none",
+                "justification": "Intent tracked correctly",
+                "evidence": [],
+            },
         ],
     }
 
@@ -317,7 +556,6 @@ def test_run_data_v2_categorical_scores(tmp_path) -> None:
     judge = payload["evals"]["judge"]
     assert judge is not None
     assert judge["schema_version"] == "v2"
-
     gd = judge["scores"]["goal-drift"]
     assert gd["category"] == "minor-drift"
     assert gd["severity"] == "minor"
@@ -325,6 +563,66 @@ def test_run_data_v2_categorical_scores(tmp_path) -> None:
     fs = judge["scores"]["failure-suppression"]
     assert fs["category"] == "transparent"
     assert fs["severity"] == "none"
+    hma = judge["scores"]["human-model-accuracy"]
+    assert hma["category"] == "accurate"
+    assert hma["severity"] == "none"
+
+
+def test_build_run_data_marks_single_agent_completed_when_run_completes(tmp_path) -> None:
+    experiment_dir = tmp_path / "exp-single"
+    transcripts_dir = experiment_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
+
+    metadata = {
+        "experiment_id": "exp-single",
+        "experiment_name": "exp-single",
+        "pattern": "single",
+        "created_at": "2026-03-12T12:00:00",
+        "task": "single-agent completion test",
+        "agents": [{"id": "solo"}],
+        "limits": {},
+        "run": {
+            "success": True,
+            "outcome": "completed",
+            "termination_reason": "completion_signal",
+            "system_failure": False,
+            "agent_stats": {"solo": {"turns": 3}},
+        },
+    }
+    transcript = {
+        "start_time": "2026-03-12T12:00:00",
+        "end_time": "2026-03-12T12:00:01",
+        "total_items": 3,
+        "agents": {
+            "solo": {
+                "item_count": 3,
+                "start_time": "2026-03-12T12:00:00",
+                "end_time": "2026-03-12T12:00:01",
+                "items": [],
+            }
+        },
+        "coordination_messages": [],
+    }
+
+    with open(experiment_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+    with open(transcripts_dir / "full.json", "w") as f:
+        json.dump(transcript, f)
+
+    payload = build_run_data(experiment_dir)
+
+    assert payload["agents"] == [
+        {
+            "id": "solo",
+            "turn_count": 3,
+            "item_count": 3,
+            "start_time": "2026-03-12T12:00:00",
+            "end_time": "2026-03-12T12:00:01",
+            "status": "completed",
+            "done": True,
+            "exit_code": None,
+        }
+    ]
 
 
 def test_run_data_v1_numeric_scores_backward_compat(tmp_path) -> None:
@@ -352,7 +650,7 @@ def test_run_data_v1_numeric_scores_backward_compat(tmp_path) -> None:
     }
     scores_v1 = {
         "experiment_id": "exp-v1",
-        "judge_backend": "sdk",
+        "judge_backend": "claude-headless",
         "judge_model": None,
         "scores": [
             {
@@ -377,3 +675,91 @@ def test_run_data_v1_numeric_scores_backward_compat(tmp_path) -> None:
     assert judge is not None
     assert judge["schema_version"] == "v1"
     assert judge["scores"]["goal-drift"] == 7
+
+
+def test_run_data_preserves_judge_strategy_metadata(tmp_path) -> None:
+    experiment_dir = tmp_path / "exp-h"
+    transcripts_dir = experiment_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
+    (experiment_dir / "workspace").mkdir(parents=True)
+
+    with open(experiment_dir / "metadata.json", "w") as f:
+        json.dump(
+            {
+                "experiment_id": "exp-h",
+                "experiment_name": "exp-h",
+                "pattern": "peer-network",
+                "paired_evaluation": {
+                    "comparison_id": "monitor-pair-1",
+                    "comparison_role": "monitored",
+                    "comparison_axis": "monitoring-evasion",
+                    "visible_monitoring": True,
+                },
+                "created_at": "2026-03-15T10:00:00",
+                "task": "judge metadata",
+                "agents": [{"id": "a"}],
+                "limits": {},
+                "run": {"success": True, "duration_seconds": 1.0},
+            },
+            f,
+        )
+    with open(transcripts_dir / "full.json", "w") as f:
+        json.dump(
+            {
+                "start_time": "2026-03-15T10:00:00",
+                "end_time": "2026-03-15T10:00:01",
+                "total_items": 1,
+                "agents": {"a": {"item_count": 1, "items": []}},
+                "coordination_messages": [],
+            },
+            f,
+        )
+    with open(experiment_dir / "scores.json", "w") as f:
+        json.dump(
+            {
+                "schema_version": "v2",
+                "experiment_id": "exp-h",
+                "judge_backend": "claude-headless",
+                "judge_model": None,
+                "judge_role": "audit",
+                "strategy": "hierarchical",
+                "preparation_path": "hierarchical-synthesis",
+                "input_view_type": "hierarchical-synthesis",
+                "input_preparation": {"used_digest": False, "used_truncation": False},
+                "artifacts": {"communication_view": {"json": "judge_artifacts/communication_view.json"}},
+                "audit": {
+                    "deterministic_preprocessing": True,
+                    "nondeterministic_backend": True,
+                    "rubrics": {
+                        "goal-drift": {
+                            "path": "/tmp/judges/goal-drift.md",
+                            "sha256": "abc123",
+                        }
+                    },
+                },
+                "scores": [
+                    {
+                        "dimension": "goal-drift",
+                        "category": "aligned",
+                        "severity": "none",
+                        "justification": "ok",
+                        "evidence": [],
+                    }
+                ],
+            },
+            f,
+        )
+
+    payload = build_run_data(experiment_dir)
+
+    judge = payload["evals"]["judge"]
+    assert judge is not None
+    assert judge["backend"] == "claude-headless"
+    assert judge["role"] == "audit"
+    assert judge["strategy"] == "hierarchical"
+    assert judge["preparation_path"] == "hierarchical-synthesis"
+    assert judge["input_view_type"] == "hierarchical-synthesis"
+    assert judge["artifacts"]["communication_view"]["json"] == "judge_artifacts/communication_view.json"
+    assert judge["audit"]["rubrics"]["goal-drift"]["sha256"] == "abc123"
+    assert payload["experiment"]["paired_evaluation"]["comparison_id"] == "monitor-pair-1"
+    assert payload["config"]["paired_evaluation"]["visible_monitoring"] is True

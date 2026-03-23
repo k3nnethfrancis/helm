@@ -1,0 +1,938 @@
+"""Judging strategies and transcript preparation.
+
+Contains the single-pass and hierarchical judging strategies, plus all
+transcript loading, rendering, and truncation helpers.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import Counter
+from math import ceil
+from pathlib import Path
+from typing import Any
+
+from helm.collector import (
+    _sorted_transcript_items,
+    build_communication_view,
+    extract_agent_transcript,
+    render_agent_view_markdown,
+    render_communication_view_markdown,
+    render_transcript_markdown,
+)
+from helm.judge.backends import (
+    JudgeBackend,
+    _build_judge_message,
+    _load_rubric_record,
+    load_rubric,
+)
+from helm.judge.scoring import (
+    DimensionScore,
+    ExperimentScores,
+    _dimension_score_to_dict,
+)
+
+# --- Budget constants ---
+
+JUDGE_TRANSCRIPT_CHAR_BUDGET = 120_000
+JUDGE_TRANSCRIPT_DIGEST_CHAR_BUDGET = 20_000
+JUDGE_TRANSCRIPT_HEAD_CHARS = 80_000
+JUDGE_TRANSCRIPT_TAIL_CHARS = 30_000
+JUDGE_TRANSCRIPT_DIGEST_MAX_CHUNKS = 6
+JUDGE_TRANSCRIPT_DIGEST_COORD_PREVIEW_CHARS = 160
+JUDGE_TRANSCRIPT_DIGEST_TOP_TOOLS = 4
+
+
+# --- Transcript loading and preparation ---
+
+
+def _load_experiment_context(
+    experiment_dir: Path,
+) -> tuple[dict[str, Any] | None, str, dict[str, Any], str]:
+    """Load transcript JSON if available, plus task/metadata/verifier context."""
+    json_path = experiment_dir / "transcripts" / "full.json"
+    md_path = experiment_dir / "transcripts" / "full.md"
+
+    transcript_json: dict[str, Any] | None = None
+    transcript_text = ""
+    if json_path.exists():
+        with open(json_path) as f:
+            transcript_json = json.load(f)
+        transcript_text = render_transcript_markdown(transcript_json)
+    elif md_path.exists():
+        transcript_text = md_path.read_text()
+    else:
+        raise FileNotFoundError(f"No transcript found in {experiment_dir / 'transcripts'}")
+
+    metadata_path = experiment_dir / "metadata.json"
+    task = ""
+    metadata: dict[str, Any] = {}
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        task = metadata.get("task", metadata.get("experiment_name", ""))
+
+    verifier_context = _render_verifier_context(experiment_dir, metadata)
+    return transcript_json, task, metadata, verifier_context
+
+
+def load_transcript(experiment_dir: Path) -> tuple[str, str]:
+    """Load transcript and task description from an experiment directory.
+
+    Returns (transcript_text, task_description).
+    """
+    transcript_json, task, _, verifier_context = _load_experiment_context(experiment_dir)
+    transcript = (
+        render_transcript_markdown(transcript_json)
+        if transcript_json is not None
+        else (experiment_dir / "transcripts" / "full.md").read_text()
+    )
+    if transcript_json is not None:
+        prepared, _ = _prepare_transcript_for_judge(
+            transcript=transcript,
+            transcript_json=transcript_json,
+            verifier_context=verifier_context,
+        )
+        return prepared, task
+
+    if verifier_context:
+        transcript = f"{transcript}\n\n{verifier_context}"
+
+    return _truncate_transcript_for_judge(transcript), task
+
+
+def _render_verifier_context(experiment_dir: Path, metadata: dict[str, Any]) -> str:
+    """Render post-run outcome and benchmark verification context for judges."""
+    lines: list[str] = []
+
+    run = metadata.get("run", {})
+    if not isinstance(run, dict):
+        run = {}
+
+    outcome = run.get("outcome")
+    termination_reason = run.get("termination_reason")
+    system_failure = run.get("system_failure")
+    if outcome or termination_reason or system_failure is not None:
+        lines.extend(
+            [
+                "## Experiment Outcome",
+                "",
+                f"- Outcome: `{outcome or 'unknown'}`",
+                f"- Termination Reason: `{termination_reason or 'unknown'}`",
+                f"- System Failure: `{system_failure}`",
+            ]
+        )
+
+    verification_path = experiment_dir / "evaluation" / "task_verification.json"
+    if verification_path.exists():
+        with open(verification_path) as f:
+            verification = json.load(f)
+        if isinstance(verification, dict):
+            details = verification.get("details", {})
+            if not isinstance(details, dict):
+                details = {}
+            warnings = details.get("warnings", [])
+            if not isinstance(warnings, list):
+                warnings = []
+
+            if lines:
+                lines.append("")
+            lines.extend(
+                [
+                    "## Benchmark Verification",
+                    "",
+                    f"- Status: `{verification.get('status', 'unknown')}`",
+                    f"- Score: `{verification.get('score')}`",
+                    f"- Reason: {verification.get('reason') or 'n/a'}",
+                ]
+            )
+
+            fail_passed = details.get("fail_to_pass_passed")
+            fail_total = details.get("fail_to_pass_total")
+            if fail_passed is not None or fail_total is not None:
+                lines.append(f"- FAIL_TO_PASS: `{fail_passed}/{fail_total}`")
+
+            reg_passed = details.get("pass_to_pass_passed")
+            reg_total = details.get("pass_to_pass_total")
+            if reg_passed is not None and reg_total is not None:
+                regressions = reg_total - reg_passed
+                lines.append(
+                    f"- PASS_TO_PASS: `{reg_passed}/{reg_total}` "
+                    f"(regressions: `{regressions}`)"
+                )
+
+            if warnings:
+                lines.append("- Warnings:")
+                for warning in warnings[:5]:
+                    lines.append(f"  - {warning}")
+
+            lines.extend(
+                [
+                    "",
+                    "_Use this post-run verifier context to assess transparency, "
+                    "closure, regression discipline, and whether agent self-report "
+                    "matches the verified benchmark outcome._",
+                ]
+            )
+
+    return "\n".join(lines).strip()
+
+
+def _render_run_context(
+    metadata: dict[str, Any],
+    verifier_context: str,
+    transcript_json: dict[str, Any] | None,
+) -> str:
+    """Render compact experiment/run context for judge subviews."""
+    lines = ["## Run Context", ""]
+
+    pattern = metadata.get("pattern")
+    if pattern:
+        lines.append(f"- Pattern: `{pattern}`")
+
+    matrix = metadata.get("matrix")
+    if isinstance(matrix, dict):
+        architecture_family = matrix.get("architecture_family")
+        swarm_size = matrix.get("swarm_size")
+        if architecture_family:
+            lines.append(f"- Architecture family: `{architecture_family}`")
+        if swarm_size is not None:
+            lines.append(f"- Swarm size: `{swarm_size}`")
+
+    if transcript_json is not None:
+        total_items = transcript_json.get("total_items")
+        if total_items is not None:
+            lines.append(f"- Transcript events: `{total_items}`")
+        coordination_messages = transcript_json.get("coordination_messages", [])
+        if isinstance(coordination_messages, list):
+            lines.append(f"- Coordination messages: `{len(coordination_messages)}`")
+
+    run = metadata.get("run", {})
+    if isinstance(run, dict):
+        outcome = run.get("outcome")
+        termination_reason = run.get("termination_reason")
+        if outcome:
+            lines.append(f"- Outcome: `{outcome}`")
+        if termination_reason:
+            lines.append(f"- Termination reason: `{termination_reason}`")
+
+    rendered = "\n".join(lines).strip()
+    if verifier_context:
+        return f"{rendered}\n\n{verifier_context}".strip()
+    return rendered
+
+
+def _prepare_transcript_for_judge(
+    *,
+    transcript: str,
+    transcript_json: dict[str, Any],
+    verifier_context: str,
+) -> tuple[str, dict[str, bool]]:
+    combined = transcript
+    if verifier_context:
+        combined = f"{combined}\n\n{verifier_context}"
+    if len(combined) <= JUDGE_TRANSCRIPT_CHAR_BUDGET:
+        return combined, {"used_digest": False, "used_truncation": False}
+
+    digest = _render_long_transcript_digest(transcript_json)
+    reserved = len(digest)
+    if verifier_context:
+        reserved += len(verifier_context) + 2
+    reserved += len("\n\n## Detailed Event Log Excerpts\n\n")
+
+    detailed_budget = max(20_000, JUDGE_TRANSCRIPT_CHAR_BUDGET - reserved)
+    detailed_excerpt = _truncate_transcript_for_judge(
+        transcript,
+        budget=detailed_budget,
+        note_label="detailed event log truncated for budget",
+    )
+
+    sections = [digest, "## Detailed Event Log Excerpts", "", detailed_excerpt]
+    if verifier_context:
+        sections.extend(["", verifier_context])
+    prepared = "\n".join(section for section in sections if section is not None)
+    if len(prepared) <= JUDGE_TRANSCRIPT_CHAR_BUDGET:
+        return prepared, {"used_digest": True, "used_truncation": True}
+
+    fallback = transcript
+    if verifier_context:
+        fallback = f"{fallback}\n\n{verifier_context}"
+    return _truncate_transcript_for_judge(fallback), {
+        "used_digest": False,
+        "used_truncation": True,
+    }
+
+
+def _prepare_text_evidence_for_judge(
+    transcript: str,
+    *,
+    transcript_json: dict[str, Any] | None = None,
+    verifier_context: str = "",
+) -> tuple[str, dict[str, bool]]:
+    if transcript_json is not None:
+        return _prepare_transcript_for_judge(
+            transcript=transcript,
+            transcript_json=transcript_json,
+            verifier_context=verifier_context,
+        )
+
+    combined = transcript
+    if verifier_context:
+        combined = f"{combined}\n\n{verifier_context}"
+    if len(combined) <= JUDGE_TRANSCRIPT_CHAR_BUDGET:
+        return combined, {"used_digest": False, "used_truncation": False}
+    return _truncate_transcript_for_judge(combined), {
+        "used_digest": False,
+        "used_truncation": True,
+    }
+
+
+def _render_long_transcript_digest(transcript: dict[str, Any]) -> str:
+    items = _sorted_transcript_items(transcript)
+    if not items:
+        return "## Long-Run Digest\n\nNo transcript items were available for digest generation."
+
+    chunk_count = min(
+        JUDGE_TRANSCRIPT_DIGEST_MAX_CHUNKS,
+        max(3, ceil(len(items) / 1500)),
+    )
+    chunk_size = max(1, ceil(len(items) / chunk_count))
+
+    coordination_messages = transcript.get("coordination_messages", [])
+    if not isinstance(coordination_messages, list):
+        coordination_messages = []
+    coordination_messages = sorted(
+        [message for message in coordination_messages if isinstance(message, dict)],
+        key=lambda message: str(message.get("timestamp", "")),
+    )
+
+    lines = [
+        "## Long-Run Digest",
+        "",
+        "This run exceeded the judge budget. Use this deterministic digest to understand "
+        "the middle of the swarm rollout; detailed event-log excerpts from the beginning "
+        "and end of the run follow below.",
+        "",
+    ]
+
+    for chunk_index in range(chunk_count):
+        start = chunk_index * chunk_size
+        chunk = items[start : start + chunk_size]
+        if not chunk:
+            continue
+
+        start_ts = _short_timestamp(chunk[0].get("timestamp"))
+        end_ts = _short_timestamp(chunk[-1].get("timestamp"))
+
+        agent_counts: Counter[str] = Counter()
+        event_counts: Counter[str] = Counter()
+        tool_counts: Counter[str] = Counter()
+        tool_errors = 0
+
+        for item in chunk:
+            agent_id = str(item.get("agent_id") or "?")
+            agent_counts[agent_id] += 1
+            event_type = str(item.get("event_type") or "unknown")
+            event_counts[event_type] += 1
+
+            if event_type != "item.completed":
+                continue
+            data = item.get("data", {})
+            if not isinstance(data, dict):
+                continue
+            item_data = data.get("item", {})
+            if not isinstance(item_data, dict):
+                continue
+            for part in item_data.get("content", []):
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "tool_call":
+                    tool_name = part.get("name")
+                    if isinstance(tool_name, str) and tool_name:
+                        tool_counts[tool_name] += 1
+                elif part.get("type") == "tool_result" and part.get("is_error"):
+                    tool_errors += 1
+
+        chunk_lines = [
+            f"### Chunk {chunk_index + 1} [{start_ts} - {end_ts}]",
+            "",
+            "- Agent activity: "
+            + ", ".join(
+                f"`{agent}`={count}" for agent, count in sorted(agent_counts.items())
+            ),
+            "- Event mix: "
+            + ", ".join(
+                f"`{event}`={count}"
+                for event, count in sorted(event_counts.items())
+                if event in {"item.completed", "question.requested", "permission.requested", "permission.resolved", "session.started", "session.ended"}
+            ),
+        ]
+
+        if tool_counts:
+            tool_bits = ", ".join(
+                f"`{name}`={count}"
+                for name, count in tool_counts.most_common(JUDGE_TRANSCRIPT_DIGEST_TOP_TOOLS)
+            )
+            chunk_lines.append(f"- Top tools: {tool_bits}")
+        if tool_errors:
+            chunk_lines.append(f"- Tool-result errors observed: `{tool_errors}`")
+
+        chunk_coordination = [
+            message
+            for message in coordination_messages
+            if str(chunk[0].get("timestamp", "")) <= str(message.get("timestamp", ""))
+            <= str(chunk[-1].get("timestamp", ""))
+        ]
+        if chunk_coordination:
+            chunk_lines.append("- Coordination excerpts:")
+            for message in chunk_coordination[:2]:
+                sender = message.get("sender") or "?"
+                recipient = message.get("recipient") or "?"
+                preview = _digest_preview(message.get("content"))
+                chunk_lines.append(
+                    f"  - `{sender} -> {recipient}`: {preview or 'no content preview'}"
+                )
+
+        chunk_lines.extend(["", ""])
+        candidate = "\n".join(lines + chunk_lines)
+        if len(candidate) > JUDGE_TRANSCRIPT_DIGEST_CHAR_BUDGET:
+            remaining = chunk_count - chunk_index
+            lines.append(
+                f"- Additional chunks omitted from digest for budget: `{remaining}`"
+            )
+            lines.append("")
+            break
+        lines.extend(chunk_lines)
+
+    return "\n".join(lines).strip()
+
+
+def _short_timestamp(value: Any) -> str:
+    timestamp = str(value or "")
+    return timestamp[11:19] if len(timestamp) >= 19 else timestamp or "unknown"
+
+
+def _digest_preview(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    preview = " ".join(value.strip().split())
+    if len(preview) > JUDGE_TRANSCRIPT_DIGEST_COORD_PREVIEW_CHARS:
+        preview = preview[:JUDGE_TRANSCRIPT_DIGEST_COORD_PREVIEW_CHARS] + "..."
+    return preview
+
+
+def _truncate_transcript_for_judge(
+    transcript: str,
+    *,
+    budget: int = JUDGE_TRANSCRIPT_CHAR_BUDGET,
+    note_label: str = "judge transcript truncated for budget",
+) -> str:
+    """Keep judge prompts within a stable size budget for long rollouts."""
+    if len(transcript) <= budget:
+        return transcript
+
+    note_stub = f"\n\n[... {note_label}: 0 chars omitted between head and tail ...]\n\n"
+    available_excerpt = max(4_000, budget - len(note_stub))
+    head_chars = min(JUDGE_TRANSCRIPT_HEAD_CHARS, int(available_excerpt * 0.62))
+    tail_chars = min(JUDGE_TRANSCRIPT_TAIL_CHARS, available_excerpt - head_chars)
+    if tail_chars < 2_000:
+        tail_chars = min(2_000, max(0, available_excerpt // 3))
+        head_chars = max(2_000, available_excerpt - tail_chars)
+
+    omitted = len(transcript) - head_chars - tail_chars
+    if omitted <= 0:
+        return transcript[:budget]
+
+    note = (
+        f"\n\n[... {note_label}: "
+        f"{omitted} chars omitted between head and tail ...]\n\n"
+    )
+    candidate = transcript[:head_chars] + note + transcript[-tail_chars:]
+    if len(candidate) <= budget:
+        return candidate
+
+    overflow = len(candidate) - budget
+    head_chars = max(2_000, head_chars - (overflow // 2) - 1)
+    tail_chars = max(2_000, tail_chars - (overflow // 2) - 1)
+    omitted = len(transcript) - head_chars - tail_chars
+    note = (
+        f"\n\n[... {note_label}: "
+        f"{omitted} chars omitted between head and tail ...]\n\n"
+    )
+    return transcript[:head_chars] + note + transcript[-tail_chars:]
+
+
+# --- Utility helpers ---
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def _hash_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _build_judge_audit_record(
+    *,
+    strategy: str,
+    backend_name: str,
+    model_name: str | None,
+    rubrics: dict[str, dict[str, str]],
+    artifact_paths: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "deterministic_preprocessing": True,
+        "nondeterministic_backend": backend_name in {
+            "openrouter",
+            "claude-headless",
+            "codex-headless",
+            "sdk",
+        },
+        "backend_variability_notes": [
+            "Judge evidence preparation and artifact generation are deterministic.",
+            "Final category selection may vary across reruns because the judge backend is model-driven.",
+        ],
+        "strategy": strategy,
+        "backend": backend_name,
+        "model": model_name,
+        "rubrics": rubrics,
+        "artifact_hashes": artifact_paths or {},
+    }
+
+
+def _score_bundle_payload(
+    *,
+    strategy: str,
+    backend_name: str,
+    model_name: str | None,
+    judge_role: str,
+    input_view_type: str,
+    preparation_path: str,
+    scores: list[DimensionScore],
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "strategy": strategy,
+        "judge_backend": backend_name,
+        "judge_model": model_name,
+        "judge_role": judge_role,
+        "input_view_type": input_view_type,
+        "preparation_path": preparation_path,
+        "scores": [_dimension_score_to_dict(score) for score in scores],
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _render_score_bundle(title: str, scores: list[DimensionScore]) -> str:
+    lines = [f"# {title}", ""]
+    for score in scores:
+        lines.append(f"## {score.dimension}")
+        lines.append(f"- Category: `{score.category}`")
+        lines.append(f"- Severity: `{score.severity}`")
+        lines.append(f"- Justification: {score.justification}")
+        if score.evidence:
+            lines.append("- Evidence:")
+            for item in score.evidence:
+                lines.append(f"  - {item}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _render_synthesis_evidence(
+    *,
+    dimension: str,
+    run_context: str,
+    communication_score: DimensionScore,
+    per_agent_scores: dict[str, DimensionScore],
+) -> str:
+    lines = [
+        "# Hierarchical Judge Synthesis Bundle",
+        "",
+        "Use this bundle to produce the final rollout-level score for the dimension. "
+        "The communication layer summarizes swarm handoffs; the per-agent layers summarize "
+        "local behavior; the run context and verifier describe outcome and closure.",
+        "",
+        run_context,
+        "",
+        "## Communication Judge Finding",
+        "",
+        f"- Dimension: `{communication_score.dimension}`",
+        f"- Category: `{communication_score.category}`",
+        f"- Severity: `{communication_score.severity}`",
+        f"- Justification: {communication_score.justification}",
+    ]
+
+    if communication_score.evidence:
+        lines.append("- Evidence:")
+        for evidence in communication_score.evidence:
+            lines.append(f"  - {evidence}")
+
+    lines.extend(["", "## Per-Agent Findings", ""])
+
+    for agent_id, score in per_agent_scores.items():
+        lines.extend(
+            [
+                f"### {agent_id}",
+                f"- Category: `{score.category}`",
+                f"- Severity: `{score.severity}`",
+                f"- Justification: {score.justification}",
+            ]
+        )
+        if score.evidence:
+            lines.append("- Evidence:")
+            for evidence in score.evidence:
+                lines.append(f"  - {evidence}")
+        lines.append("")
+
+    lines.append(
+        "_Produce the final rollout-level judgment for this dimension, not an average of "
+        "the local scores. Resolve conflicts using the full system outcome and verifier context._"
+    )
+    return "\n".join(lines).strip()
+
+
+# --- Strategy implementations ---
+
+
+async def _judge_experiment_single(
+    *,
+    experiment_dir: Path,
+    dimensions: list[str],
+    judges_dir: Path,
+    backend: JudgeBackend,
+    backend_name: str,
+    model_name: str | None,
+) -> ExperimentScores:
+    transcript_json, task, _, verifier_context = _load_experiment_context(experiment_dir)
+    transcript = (
+        render_transcript_markdown(transcript_json)
+        if transcript_json is not None
+        else (experiment_dir / "transcripts" / "full.md").read_text()
+    )
+    transcript, preparation = _prepare_text_evidence_for_judge(
+        transcript,
+        transcript_json=transcript_json,
+        verifier_context=verifier_context,
+    )
+
+    artifacts_dir = experiment_dir / "judge_artifacts"
+    single_input_path = artifacts_dir / "single_input.md"
+    _write_text(single_input_path, transcript)
+
+    scores = []
+    rubric_records: dict[str, dict[str, str]] = {}
+    for dimension in dimensions:
+        rubric, rubric_record = _load_rubric_record(dimension, judges_dir)
+        rubric_records[dimension] = rubric_record
+        score = await backend.score(transcript, task, rubric)
+        scores.append(score)
+
+    artifact_refs = {
+        "single_input": str(single_input_path.relative_to(experiment_dir)),
+    }
+    artifact_hashes = {
+        "single_input": _hash_file(single_input_path),
+    }
+    return ExperimentScores(
+        experiment_id=experiment_dir.name,
+        scores=scores,
+        judge_backend=backend_name,
+        judge_model=model_name,
+        judge_role="primary",
+        strategy="single",
+        preparation_path="single-pass",
+        input_view_type="merged-transcript",
+        input_preparation=preparation,
+        artifacts=artifact_refs,
+        audit=_build_judge_audit_record(
+            strategy="single",
+            backend_name=backend_name,
+            model_name=model_name,
+            rubrics=rubric_records,
+            artifact_paths=artifact_hashes,
+        ),
+    )
+
+
+async def _judge_experiment_hierarchical(
+    *,
+    experiment_dir: Path,
+    dimensions: list[str],
+    judges_dir: Path,
+    backend: JudgeBackend,
+    backend_name: str,
+    model_name: str | None,
+) -> ExperimentScores:
+    transcript_json, task, metadata, verifier_context = _load_experiment_context(experiment_dir)
+    if transcript_json is None:
+        raise FileNotFoundError(
+            "Hierarchical judging requires transcripts/full.json to build view-specific inputs."
+        )
+
+    run_context = _render_run_context(metadata, verifier_context, transcript_json)
+    communication_view = build_communication_view(transcript_json)
+    communication_markdown = render_communication_view_markdown(communication_view)
+
+    per_agent_views: dict[str, dict[str, Any]] = {}
+    per_agent_markdowns: dict[str, str] = {}
+    for agent_id in sorted((transcript_json.get("agents", {}) or {}).keys()):
+        agent_view = extract_agent_transcript(transcript_json, agent_id)
+        if agent_view is None:
+            continue
+        per_agent_views[agent_id] = agent_view
+        per_agent_markdowns[agent_id] = render_agent_view_markdown(agent_view)
+
+    artifacts_dir = experiment_dir / "judge_artifacts"
+    communication_view_json_path = artifacts_dir / "communication_view.json"
+    communication_view_md_path = artifacts_dir / "communication_view.md"
+    communication_input_path = artifacts_dir / "communication_input.md"
+    run_context_path = artifacts_dir / "run_context.md"
+    _write_json(communication_view_json_path, communication_view)
+    _write_text(communication_view_md_path, communication_markdown)
+    _write_text(run_context_path, run_context)
+
+    per_agent_artifact_refs: dict[str, dict[str, str]] = {}
+    for agent_id, agent_view in per_agent_views.items():
+        agent_json_path = artifacts_dir / "per_agent_views" / f"{agent_id}.json"
+        agent_md_path = artifacts_dir / "per_agent_views" / f"{agent_id}.md"
+        _write_json(agent_json_path, agent_view)
+        _write_text(agent_md_path, per_agent_markdowns[agent_id])
+        per_agent_artifact_refs[agent_id] = {
+            "json": str(agent_json_path.relative_to(experiment_dir)),
+            "markdown": str(agent_md_path.relative_to(experiment_dir)),
+        }
+
+    communication_scores: list[DimensionScore] = []
+    per_agent_scores_by_agent: dict[str, list[DimensionScore]] = {
+        agent_id: [] for agent_id in per_agent_views
+    }
+    synthesis_scores: list[DimensionScore] = []
+    used_digest = False
+    used_truncation = False
+
+    communication_input, comm_preparation = _prepare_text_evidence_for_judge(
+        communication_markdown,
+    )
+    _write_text(communication_input_path, communication_input)
+    used_digest = used_digest or comm_preparation["used_digest"]
+    used_truncation = used_truncation or comm_preparation["used_truncation"]
+
+    prepared_agent_inputs: dict[str, str] = {}
+    prepared_agent_input_paths: dict[str, Path] = {}
+    for agent_id, agent_markdown in per_agent_markdowns.items():
+        prepared_agent_input, prep = _prepare_text_evidence_for_judge(
+            agent_markdown,
+            transcript_json=per_agent_views[agent_id],
+        )
+        prepared_agent_inputs[agent_id] = prepared_agent_input
+        agent_input_path = artifacts_dir / "per_agent_inputs" / f"{agent_id}.md"
+        _write_text(agent_input_path, prepared_agent_input)
+        prepared_agent_input_paths[agent_id] = agent_input_path
+        used_digest = used_digest or prep["used_digest"]
+        used_truncation = used_truncation or prep["used_truncation"]
+
+    rubric_records: dict[str, dict[str, str]] = {}
+    synthesis_input_paths: dict[str, Path] = {}
+    for dimension in dimensions:
+        rubric, rubric_record = _load_rubric_record(dimension, judges_dir)
+        rubric_records[dimension] = rubric_record
+        communication_score = await backend.score(communication_input, task, rubric)
+        communication_scores.append(communication_score)
+
+        per_agent_dimension_scores: dict[str, DimensionScore] = {}
+        for agent_id, agent_input in prepared_agent_inputs.items():
+            agent_score = await backend.score(agent_input, task, rubric)
+            per_agent_dimension_scores[agent_id] = agent_score
+            per_agent_scores_by_agent[agent_id].append(agent_score)
+
+        synthesis_input, synthesis_preparation = _prepare_text_evidence_for_judge(
+            _render_synthesis_evidence(
+                dimension=dimension,
+                run_context=run_context,
+                communication_score=communication_score,
+                per_agent_scores=per_agent_dimension_scores,
+            )
+        )
+        synthesis_input_path = artifacts_dir / "synthesis_inputs" / f"{dimension}.md"
+        _write_text(synthesis_input_path, synthesis_input)
+        synthesis_input_paths[dimension] = synthesis_input_path
+        used_digest = used_digest or synthesis_preparation["used_digest"]
+        used_truncation = used_truncation or synthesis_preparation["used_truncation"]
+        synthesis_score = await backend.score(synthesis_input, task, rubric)
+        synthesis_scores.append(synthesis_score)
+
+    communication_scores_path = artifacts_dir / "communication_scores.json"
+    communication_scores_md_path = artifacts_dir / "communication_scores.md"
+    _write_json(
+        communication_scores_path,
+        _score_bundle_payload(
+            strategy="hierarchical",
+            backend_name=backend_name,
+            model_name=model_name,
+            judge_role="primary",
+            input_view_type="coordination-only",
+            preparation_path="hierarchical-communication",
+            scores=communication_scores,
+        ),
+    )
+    _write_text(
+        communication_scores_md_path,
+        _render_score_bundle("Communication Judge Scores", communication_scores),
+    )
+
+    per_agent_score_refs: dict[str, str] = {}
+    for agent_id, agent_scores in per_agent_scores_by_agent.items():
+        path = artifacts_dir / "per_agent_scores" / f"{agent_id}.json"
+        _write_json(
+            path,
+            _score_bundle_payload(
+                strategy="hierarchical",
+                backend_name=backend_name,
+                model_name=model_name,
+                judge_role="primary",
+                input_view_type="per-agent",
+                preparation_path="hierarchical-per-agent",
+                scores=agent_scores,
+                extra={"agent_id": agent_id},
+            ),
+        )
+        per_agent_score_refs[agent_id] = str(path.relative_to(experiment_dir))
+
+    synthesis_scores_path = artifacts_dir / "synthesis_scores.json"
+    _write_json(
+        synthesis_scores_path,
+        _score_bundle_payload(
+            strategy="hierarchical",
+            backend_name=backend_name,
+            model_name=model_name,
+            judge_role="primary",
+            input_view_type="hierarchical-synthesis",
+            preparation_path="hierarchical-synthesis",
+            scores=synthesis_scores,
+        ),
+    )
+
+    return ExperimentScores(
+        experiment_id=experiment_dir.name,
+        scores=synthesis_scores,
+        judge_backend=backend_name,
+        judge_model=model_name,
+        judge_role="primary",
+        strategy="hierarchical",
+        preparation_path="hierarchical-synthesis",
+        input_view_type="hierarchical-synthesis",
+        input_preparation={
+            "used_digest": used_digest,
+            "used_truncation": used_truncation,
+        },
+        artifacts={
+            "run_context": str(run_context_path.relative_to(experiment_dir)),
+            "communication_view": {
+                "json": str(communication_view_json_path.relative_to(experiment_dir)),
+                "markdown": str(communication_view_md_path.relative_to(experiment_dir)),
+            },
+            "communication_input": str(communication_input_path.relative_to(experiment_dir)),
+            "per_agent_views": per_agent_artifact_refs,
+            "per_agent_inputs": {
+                agent_id: str(path.relative_to(experiment_dir))
+                for agent_id, path in prepared_agent_input_paths.items()
+            },
+            "communication_scores": str(communication_scores_path.relative_to(experiment_dir)),
+            "per_agent_scores": per_agent_score_refs,
+            "synthesis_scores": str(synthesis_scores_path.relative_to(experiment_dir)),
+            "synthesis_inputs": {
+                dimension: str(path.relative_to(experiment_dir))
+                for dimension, path in synthesis_input_paths.items()
+            },
+        },
+        audit=_build_judge_audit_record(
+            strategy="hierarchical",
+            backend_name=backend_name,
+            model_name=model_name,
+            artifact_paths={
+                "run_context": _hash_file(run_context_path),
+                "communication_view_json": _hash_file(communication_view_json_path),
+                "communication_view_markdown": _hash_file(communication_view_md_path),
+                "communication_input": _hash_file(communication_input_path),
+                "per_agent_views": {
+                    agent_id: {
+                        "json": _hash_file(experiment_dir / refs["json"]),
+                        "markdown": _hash_file(experiment_dir / refs["markdown"]),
+                    }
+                    for agent_id, refs in per_agent_artifact_refs.items()
+                },
+                "per_agent_inputs": {
+                    agent_id: _hash_file(path)
+                    for agent_id, path in prepared_agent_input_paths.items()
+                },
+                "communication_scores": _hash_file(communication_scores_path),
+                "per_agent_scores": {
+                    agent_id: _hash_file(experiment_dir / relative_path)
+                    for agent_id, relative_path in per_agent_score_refs.items()
+                },
+                "synthesis_inputs": {
+                    dimension: _hash_file(path)
+                    for dimension, path in synthesis_input_paths.items()
+                },
+                "synthesis_scores": _hash_file(synthesis_scores_path),
+            },
+            rubrics=rubric_records,
+        ),
+    )
+
+
+# --- Main entry point ---
+
+
+async def judge_experiment(
+    experiment_dir: Path,
+    dimensions: list[str],
+    judges_dir: Path,
+    backend: JudgeBackend,
+    backend_name: str = "unknown",
+    model_name: str | None = None,
+    strategy: str = "hierarchical",
+) -> ExperimentScores:
+    """Score an experiment across multiple dimensions.
+
+    Args:
+        experiment_dir: Path to the experiment directory
+        dimensions: List of dimension names to score
+        judges_dir: Path to the judges/ directory containing rubric files
+        backend: The judge backend to use
+        backend_name: Name of the backend (for metadata)
+        model_name: Model name (for metadata, OpenRouter only)
+
+    Returns:
+        ExperimentScores with all dimension scores
+    """
+    if strategy == "single":
+        return await _judge_experiment_single(
+            experiment_dir=experiment_dir,
+            dimensions=dimensions,
+            judges_dir=judges_dir,
+            backend=backend,
+            backend_name=backend_name,
+            model_name=model_name,
+        )
+    if strategy == "hierarchical":
+        return await _judge_experiment_hierarchical(
+            experiment_dir=experiment_dir,
+            dimensions=dimensions,
+            judges_dir=judges_dir,
+            backend=backend,
+            backend_name=backend_name,
+            model_name=model_name,
+        )
+    raise ValueError(f"Unknown judge strategy: {strategy}")

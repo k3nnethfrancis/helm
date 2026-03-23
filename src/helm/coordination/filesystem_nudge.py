@@ -14,8 +14,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from helm.coordination.base import CoordinationMessage, MessageType, OnMessageCallback
-from helm.sdk import SDKClient
+from helm.coordination.base import (
+    CoordinationMessage,
+    DeliveryStatus,
+    MessageType,
+    OnMessageCallback,
+)
+from helm.sdk import FollowUpMessageUnsupportedError, SDKClient
 
 
 class FilesystemNudgeBackend:
@@ -41,6 +46,8 @@ class FilesystemNudgeBackend:
         self._is_hub_spoke: bool = False
         self._agent_roles: dict[str, str] = {}
         self._hub_agent_id: str | None = None
+        self._coord_base_path = "coordination/"
+        self._channel_specs: list[dict[str, Any]] = []
 
         # Watched artifact patterns in workspace/ that trigger nudges
         self._workspace_watches: list[str] = []
@@ -72,6 +79,7 @@ class FilesystemNudgeBackend:
 
         paths = config.get("paths", {})
         base = paths.get("base", "coordination/")
+        self._coord_base_path = self._normalize_path(base) or "coordination/"
         self._coord_dir = self._experiment_dir / base
 
         # Create coordination base dir
@@ -99,13 +107,14 @@ class FilesystemNudgeBackend:
         # Set up workspace watching
         self._workspace_dir = self._experiment_dir / "workspace"
         self._workspace_watches = config.get("workspace_watches", [])
+        self._channel_specs = self._build_channel_specs(config)
 
         # Snapshot existing files so we only react to new ones
         self._known_files = self._scan_all_files()
         self._known_workspace_files = self._scan_workspace_files()
 
     def get_prompt_instructions(self, agent_id: str) -> str:
-        """Return empty string — existing YAML prompts already have filesystem instructions."""
+        """Do not inject framework-level coordination policy into agent prompts."""
         return ""
 
     async def start_watching(
@@ -242,7 +251,9 @@ class FilesystemNudgeBackend:
             message_type=msg_type,
             content=full_content,
             source_path=relative,
+            observed_via="filesystem_poll",
         )
+        self._annotate_channel(message)
 
         # Deliver nudge if we have a target
         # Skip completion signals in hub-spoke (signals/done = experiment over),
@@ -253,15 +264,39 @@ class FilesystemNudgeBackend:
             message.nudge_text = nudge_text
 
             if recipient == "__all__":
+                targets = [agent_id for agent_id in self._agents if agent_id != sender]
+                delivered_to: list[str] = []
+                failed_to: dict[str, str] = {}
                 for agent_id in self._agents:
                     if agent_id != sender:
-                        await self._deliver_nudge(agent_id, nudge_text)
-                message.delivered = True
-                message.delivery_timestamp = datetime.now()
+                        ok, reason = await self._deliver_nudge(agent_id, nudge_text)
+                        if ok:
+                            delivered_to.append(agent_id)
+                        elif reason:
+                            failed_to[agent_id] = reason
+                message.metadata["delivery_attempted_to"] = targets
+                message.metadata["delivered_to"] = delivered_to
+                if failed_to:
+                    message.metadata["delivery_failures"] = failed_to
+                if targets and len(delivered_to) == len(targets):
+                    message.delivered = True
+                    message.delivery_timestamp = datetime.now()
+                    message.delivery_status = DeliveryStatus.DELIVERED
+                elif delivered_to:
+                    message.delivery_status = DeliveryStatus.PARTIAL
+                elif targets:
+                    message.delivery_status = DeliveryStatus.FAILED
             elif recipient in self._agent_sessions:
-                await self._deliver_nudge(recipient, nudge_text)
-                message.delivered = True
-                message.delivery_timestamp = datetime.now()
+                ok, reason = await self._deliver_nudge(recipient, nudge_text)
+                message.metadata["delivery_attempted_to"] = [recipient]
+                if ok:
+                    message.delivered = True
+                    message.delivery_timestamp = datetime.now()
+                    message.metadata["delivered_to"] = [recipient]
+                    message.delivery_status = DeliveryStatus.DELIVERED
+                elif reason:
+                    message.metadata["delivery_failures"] = {recipient: reason}
+                    message.delivery_status = DeliveryStatus.FAILED
 
         # Report to collector
         if self._on_message:
@@ -284,7 +319,9 @@ class FilesystemNudgeBackend:
             message_type=MessageType.STATUS_UPDATE,
             content=full_content,
             source_path=relative,
+            observed_via="workspace_watch",
         )
+        self._annotate_channel(message)
 
         nudge_text = (
             f"[Artifact Created] {relative}\n\n"
@@ -294,13 +331,153 @@ class FilesystemNudgeBackend:
         )
         if deliver_nudges:
             message.nudge_text = nudge_text
+            delivered_to: list[str] = []
+            failed_to: dict[str, str] = {}
             for agent_id in self._agents:
-                await self._deliver_nudge(agent_id, nudge_text)
-            message.delivered = True
-            message.delivery_timestamp = datetime.now()
+                ok, reason = await self._deliver_nudge(agent_id, nudge_text)
+                if ok:
+                    delivered_to.append(agent_id)
+                elif reason:
+                    failed_to[agent_id] = reason
+            message.metadata["delivery_attempted_to"] = list(self._agents)
+            message.metadata["delivered_to"] = delivered_to
+            if failed_to:
+                message.metadata["delivery_failures"] = failed_to
+            if self._agents and len(delivered_to) == len(self._agents):
+                message.delivered = True
+                message.delivery_timestamp = datetime.now()
+                message.delivery_status = DeliveryStatus.DELIVERED
+            elif delivered_to:
+                message.delivery_status = DeliveryStatus.PARTIAL
+            elif self._agents:
+                message.delivery_status = DeliveryStatus.FAILED
 
         if self._on_message:
             self._on_message(message)
+
+    def _build_channel_specs(self, config: dict[str, Any]) -> list[dict[str, Any]]:
+        """Normalize configured channels for path-based matching."""
+        channels = config.get("channels", [])
+        if not isinstance(channels, list):
+            return []
+
+        specs: list[dict[str, Any]] = []
+        base = self._coord_base_path.rstrip("/")
+        for raw_channel in channels:
+            if not isinstance(raw_channel, dict):
+                continue
+
+            raw_paths = raw_channel.get("paths", [])
+            if not isinstance(raw_paths, list):
+                raw_paths = []
+
+            experiment_paths: list[str] = []
+            coord_relative_paths: list[str] = []
+            for raw_path in raw_paths:
+                normalized = self._normalize_path(raw_path)
+                if not normalized:
+                    continue
+                experiment_paths.append(normalized)
+
+                if normalized == base:
+                    coord_relative_paths.append("")
+                elif normalized.startswith(f"{base}/"):
+                    coord_relative_paths.append(normalized[len(base) + 1 :])
+
+            specs.append(
+                {
+                    "id": self._value_to_str(raw_channel.get("id")),
+                    "medium": self._value_to_str(raw_channel.get("medium")),
+                    "persistence": self._value_to_str(raw_channel.get("persistence")),
+                    "scope": self._value_to_str(raw_channel.get("scope")),
+                    "availability": self._value_to_str(raw_channel.get("availability")),
+                    "experiment_paths": experiment_paths,
+                    "coord_relative_paths": coord_relative_paths,
+                }
+            )
+
+        return specs
+
+    def _annotate_channel(self, message: CoordinationMessage) -> None:
+        """Attach explicit channel metadata to an observed coordination event."""
+        source_path = self._normalize_path(message.source_path)
+        observed_via = message.observed_via or "filesystem_poll"
+        matched = self._match_channel(source_path, observed_via)
+
+        if matched:
+            message.channel_id = matched.get("id")
+            message.channel_medium = matched.get("medium")
+            message.channel_persistence = matched.get("persistence")
+            message.channel_scope = matched.get("scope")
+            message.channel_availability = matched.get("availability")
+            return
+
+        message.channel_medium = "filesystem"
+        message.channel_persistence = "persistent"
+        if message.recipient == "__all__":
+            message.channel_scope = "broadcast"
+        elif message.recipient:
+            message.channel_scope = "targeted"
+        else:
+            message.channel_scope = "shared"
+        message.channel_availability = "always"
+
+    def _match_channel(
+        self,
+        source_path: str | None,
+        observed_via: str,
+    ) -> dict[str, Any] | None:
+        """Match a recorded path to a configured coordination channel."""
+        if not source_path:
+            return None
+
+        experiment_relative = source_path
+        if observed_via == "filesystem_poll":
+            base = self._coord_base_path.rstrip("/")
+            experiment_relative = f"{base}/{source_path}" if base else source_path
+
+        for spec in self._channel_specs:
+            candidates = (
+                spec.get("coord_relative_paths", [])
+                if observed_via == "filesystem_poll"
+                else spec.get("experiment_paths", [])
+            )
+            for candidate in candidates:
+                if self._path_matches(source_path if observed_via == "filesystem_poll" else experiment_relative, candidate):
+                    return spec
+        return None
+
+    def _path_matches(self, observed_path: str, candidate: str) -> bool:
+        candidate = self._normalize_path(candidate)
+        observed_path = self._normalize_path(observed_path)
+        if not candidate or not observed_path:
+            return False
+        if observed_path == candidate:
+            return True
+        return observed_path.startswith(f"{candidate.rstrip('/')}/")
+
+    def _normalize_path(self, path: Any) -> str | None:
+        value = self._value_to_str(path)
+        if value is None:
+            return None
+        normalized = value.replace("\\", "/").strip()
+        if not normalized:
+            return None
+        normalized = normalized.lstrip("./")
+        normalized = normalized.lstrip("/")
+        if value.endswith("/") and not normalized.endswith("/"):
+            normalized += "/"
+        return normalized
+
+    def _value_to_str(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        enum_value = getattr(value, "value", None)
+        if isinstance(enum_value, str):
+            return enum_value
+        if isinstance(value, str):
+            return value
+        return str(value)
 
     def _classify_file(
         self, relative_path: str, filename: str
@@ -467,16 +644,24 @@ class FilesystemNudgeBackend:
 
         return "\n".join(parts)
 
-    async def _deliver_nudge(self, agent_id: str, nudge_text: str) -> None:
+    async def _deliver_nudge(self, agent_id: str, nudge_text: str) -> tuple[bool, str | None]:
         """Send a nudge message to an agent via the SDK."""
         if self._sdk is None:
-            return
+            return False, "sdk_unavailable"
 
         session_id = self._agent_sessions.get(agent_id)
         if not session_id:
-            return
+            return False, "missing_session"
+
+        supports_follow_up = getattr(self._sdk, "supports_follow_up_messages", None)
+        if callable(supports_follow_up) and not supports_follow_up(session_id):
+            return False, "follow_up_messages_unsupported"
 
         try:
             await self._sdk.post_message(session_id, nudge_text)
+            return True, None
+        except FollowUpMessageUnsupportedError:
+            return False, "follow_up_messages_unsupported"
         except Exception as e:
             print(f"[coordination] nudge delivery failed for {agent_id}: {e}")
+            return False, str(e)

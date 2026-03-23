@@ -228,10 +228,12 @@ def build_orchestration_training_row(record: dict[str, Any]) -> dict[str, Any]:
     target = derive_policy_target(record)
     task_id = record.get("id")
     benchmark = _as_dict(record.get("benchmark"))
+    matrix = _as_dict(record.get("matrix"))
 
     info: dict[str, Any] = {
         "source_id": task_id if isinstance(task_id, str) else "",
         "benchmark": benchmark,
+        "matrix": matrix,
         "reward": _to_float(record.get("reward")),
         "policy_tags": list(_POLICY_TAGS),
     }

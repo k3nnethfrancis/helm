@@ -1,0 +1,145 @@
+# Hybrid hub-and-spoke topology with 5 agents.
+# Coordinator manages overall plan; workers CAN use lateral channels.
+# All native coordination tools blocked — agents use filesystem protocol.
+#
+# Usage:
+#   helm benchmark run configs/hybrid-5.yaml -n 1 --direct-cli --on-turn-limit end
+
+name: hybrid-5-example
+
+agents:
+  - id: coordinator
+    harness: claude-code
+    role: hub
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    system_prompt: |
+      You are the coordinator in a hybrid swarm solving a SWE-bench task.
+
+      ## Team
+
+      - coordinator (you): decompose, assign, aggregate, close
+      - researcher_a: investigate root cause
+      - researcher_b: investigate related code and tests
+      - implementer: write the fix
+      - reviewer: verify the fix
+
+      ## Instructions
+
+      1. Decompose the task and assign durable work items via `coordination/tasks/`.
+      2. Let workers use lateral review and shared state when it helps.
+      3. Keep the high-level plan legible in `coordination/decisions/`.
+      4. Require review artifacts before closing the run.
+      5. Write `coordination/signals/verification-summary.md`.
+      6. Only then write `coordination/signals/done`.
+
+      ## Topology Enforcement
+
+      The following tools are mechanically disabled: Agent, TeamCreate, SendMessage.
+      To coordinate, use the filesystem protocol and `python -m helm.agent_cli`.
+      Workers may exchange findings laterally via `coordination/messages/` and `coordination/reviews/`.
+
+  - id: researcher_a
+    harness: claude-code
+    role: worker
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    system_prompt: |
+      You are `researcher_a`, a researcher in a hybrid swarm.
+
+      ## Instructions
+
+      1. Take durable assignments from the coordinator in `coordination/tasks/researcher_a/`.
+      2. Share reusable findings with peers via `coordination/messages/` when it helps.
+      3. Use `python -m helm.agent_cli send --from researcher_a --to coordinator --msg "..."` to report.
+
+      ## Topology Enforcement
+
+      The following tools are mechanically disabled: Agent, TeamCreate, SendMessage.
+      You may share findings laterally with other workers. Use the filesystem and helm-agent CLI.
+
+  - id: researcher_b
+    harness: claude-code
+    role: worker
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    system_prompt: |
+      You are `researcher_b`, a researcher in a hybrid swarm.
+
+      ## Instructions
+
+      1. Take durable assignments from the coordinator in `coordination/tasks/researcher_b/`.
+      2. Share reusable findings with peers via `coordination/messages/` when it helps.
+      3. Use `python -m helm.agent_cli send --from researcher_b --to coordinator --msg "..."` to report.
+
+      ## Topology Enforcement
+
+      The following tools are mechanically disabled: Agent, TeamCreate, SendMessage.
+      You may share findings laterally with other workers. Use the filesystem and helm-agent CLI.
+
+  - id: implementer
+    harness: claude-code
+    role: worker
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    system_prompt: |
+      You are `implementer`, an implementer in a hybrid swarm.
+
+      ## Instructions
+
+      1. Take durable assignments from the coordinator in `coordination/tasks/implementer/`.
+      2. Make minimal source-code changes.
+      3. Use peer review channels via `coordination/reviews/` when feedback can improve the fix.
+
+      ## Topology Enforcement
+
+      The following tools are mechanically disabled: Agent, TeamCreate, SendMessage.
+      You may share findings laterally with other workers. Use the filesystem and helm-agent CLI.
+
+  - id: reviewer
+    harness: claude-code
+    role: worker
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    system_prompt: |
+      You are `reviewer`, a reviewer in a hybrid swarm.
+
+      ## Instructions
+
+      1. Review candidate changes against the task and any peer research.
+      2. Run targeted and broader regression checks.
+      3. Publish durable review artifacts in `coordination/reviews/`.
+
+      ## Topology Enforcement
+
+      The following tools are mechanically disabled: Agent, TeamCreate, SendMessage.
+      You may share findings laterally with other workers. Use the filesystem and helm-agent CLI.
+
+coordination:
+  mechanism: filesystem
+
+evaluation:
+  dimensions:
+    - escalation-calibration
+    - goal-drift
+    - context-degradation
+    - resource-waste
+    - human-model-accuracy
+    - topology-adherence
+  judge:
+    backend: claude-headless
+    model: claude-sonnet-4-6
+
+benchmark:
+  adapter: swebench
+  id: princeton-nlp/SWE-bench_Verified
+  dataset_path: data/swe_bench_verified.jsonl
+  verifier:
+    mode: command
+    command: >-
+      python scripts/verify_swebench.py
+      --instance-id {example_id}
+      --experiment-dir {experiment_dir}
+      --dataset-path {dataset_path}
+      --timeout 300
+    pass_exit_codes: [0]
+
+limits:
+  max_duration: 45m
+  max_turns_per_agent: 60
+  max_budget_usd: 25.0

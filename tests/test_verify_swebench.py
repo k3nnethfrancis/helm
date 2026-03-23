@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -139,6 +141,46 @@ def test_compute_verification_setup_error() -> None:
     assert result["details"]["setup_error"] == "uv venv failed"
 
 
+def test_compute_verification_includes_warnings() -> None:
+    result = verify_swebench.compute_verification(
+        fail_to_pass_results={"test_a": True},
+        pass_to_pass_results={},
+        warnings=["ignored benchmark-owned test edits"],
+    )
+    assert result["details"]["warnings"] == ["ignored benchmark-owned test edits"]
+
+
+def test_sanitize_test_id_allows_parameterized_pytest_nodes() -> None:
+    test_id = "lib/matplotlib/tests/test_patches.py::test_boxstyle_errors[Round,foo-Incorrect]"
+    assert verify_swebench._sanitize_test_id(test_id) == test_id
+
+
+def test_sanitize_test_id_rejects_control_characters() -> None:
+    with pytest.raises(ValueError):
+        verify_swebench._sanitize_test_id("tests/test_example.py::test_bad\nrm -rf /")
+
+
+def test_resolve_descriptive_test_id_tolerates_non_utf8_files(tmp_path: Path) -> None:
+    test_file = tmp_path / "tests" / "test_weird.py"
+    test_file.parent.mkdir()
+    test_file.write_bytes(
+        b"def test_ascii():\n"
+        b"    pass\n\n"
+        b"# \xff\xd5 non-utf8 bytes\n"
+        b"def test_target():\n"
+        b"    \"\"\"Human readable label\"\"\"\n"
+        b"    pass\n"
+    )
+
+    result = verify_swebench._resolve_descriptive_test_id(
+        "Human readable label",
+        ["tests/test_weird.py"],
+        tmp_path,
+    )
+
+    assert result == "tests.test_weird.test_target"
+
+
 # ---------------------------------------------------------------------------
 # _load_row
 # ---------------------------------------------------------------------------
@@ -205,6 +247,56 @@ def test_find_agent_patch_empty_workspace(tmp_path: Path) -> None:
     assert result is None
 
 
+def test_find_agent_patch_falls_back_to_workspace_git_diff(tmp_path: Path) -> None:
+    workspace_repo = tmp_path / "workspace" / "repo"
+    workspace_repo.mkdir(parents=True)
+
+    subprocess.run(["git", "init"], cwd=workspace_repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Helm Test"],
+        cwd=workspace_repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "helm@example.com"],
+        cwd=workspace_repo,
+        check=True,
+        capture_output=True,
+    )
+
+    tracked = workspace_repo / "tracked.py"
+    tracked.write_text("value = 1\n")
+    subprocess.run(
+        ["git", "add", "tracked.py"],
+        cwd=workspace_repo,
+        check=True,
+        capture_output=True,
+    )
+    env = dict(
+        os.environ,
+        GIT_AUTHOR_DATE="2026-03-08T00:00:00+0000",
+        GIT_COMMITTER_DATE="2026-03-08T00:00:00+0000",
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=workspace_repo,
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+
+    tracked.write_text("value = 2\n")
+    new_file = workspace_repo / "new_file.py"
+    new_file.write_text("created = True\n")
+
+    result = verify_swebench.find_agent_patch(tmp_path)
+
+    assert result is not None
+    assert "tracked.py" in result
+    assert "new_file.py" in result
+
+
 def test_find_agent_patch_prefers_newest(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -220,6 +312,31 @@ def test_find_agent_patch_prefers_newest(tmp_path: Path) -> None:
 
     result = verify_swebench.find_agent_patch(tmp_path)
     assert result == "new content"
+
+
+def test_strip_patch_for_paths_removes_hidden_test_overlap() -> None:
+    patch_text = (
+        "diff --git a/tests.py b/tests.py\n"
+        "--- a/tests.py\n"
+        "+++ b/tests.py\n"
+        "@@ -1,2 +1,5 @@\n"
+        " def test_existing():\n"
+        "     assert True\n"
+        "+\n"
+        "+def test_agent_added():\n"
+        "+    assert 1 == 1\n"
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-value = 1\n"
+        "+value = 2\n"
+    )
+
+    filtered = verify_swebench.strip_patch_for_paths(patch_text, {"tests.py"})
+
+    assert "tests.py" not in filtered
+    assert "app.py" in filtered
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +373,166 @@ def test_get_python_version_known() -> None:
 
 def test_get_python_version_unknown_falls_back() -> None:
     assert verify_swebench.get_python_version("unknown/repo", "1.0") == "3.9"
+
+
+def test_requires_docker_fallback_for_legacy_python() -> None:
+    assert verify_swebench._requires_docker_fallback("3.5") is True
+    assert verify_swebench._requires_docker_fallback("3.6") is True
+    assert verify_swebench._requires_docker_fallback("3.7") is False
+    assert verify_swebench._requires_docker_fallback("3.11") is False
+
+
+def test_setup_test_env_legacy_python_without_docker(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(verify_swebench, "_conda_executable", lambda: None)
+    monkeypatch.setattr(verify_swebench, "_docker_available", lambda: False)
+
+    env, error = verify_swebench.setup_test_env(
+        tmp_path,
+        "django/django",
+        "3.0",
+        timeout=30,
+    )
+
+    assert env is None
+    assert error is not None
+    assert "fallback" in error
+
+
+def test_setup_test_env_legacy_python_uses_conda_first(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[list[str], dict[str, str] | None]] = []
+
+    def _fake_run(args, **kwargs):
+        calls.append((list(args), kwargs.get("env")))
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(verify_swebench, "_conda_executable", lambda: "/usr/bin/conda")
+    monkeypatch.setattr(verify_swebench.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(verify_swebench.sys, "platform", "darwin")
+    monkeypatch.delenv("CONDA_SUBDIR", raising=False)
+    monkeypatch.setattr(verify_swebench.subprocess, "run", _fake_run)
+
+    env, error = verify_swebench.setup_test_env(
+        tmp_path,
+        "django/django",
+        "3.0",
+        timeout=30,
+    )
+
+    assert error is None
+    assert env is not None
+    assert env.kind == "conda"
+    assert env.python_version == "3.6"
+    assert calls[0][0][:8] == [
+        "/usr/bin/conda",
+        "create",
+        "-p",
+        str(tmp_path / ".venv"),
+        "-c",
+        "conda-forge",
+        "--override-channels",
+        "python=3.6",
+    ]
+    assert calls[0][0][8] == "pip"
+    assert calls[0][1] is not None
+    assert calls[0][1]["CONDA_SUBDIR"] == "osx-64"
+
+
+def test_conda_create_env_vars_legacy_python_on_arm64_darwin(monkeypatch) -> None:
+    monkeypatch.setattr(verify_swebench.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(verify_swebench.sys, "platform", "darwin")
+    monkeypatch.delenv("CONDA_SUBDIR", raising=False)
+
+    env = verify_swebench._conda_create_env_vars("3.6")
+
+    assert env["CONDA_SUBDIR"] == "osx-64"
+
+
+def test_conda_create_env_vars_modern_python_has_no_platform_override(monkeypatch) -> None:
+    monkeypatch.setattr(verify_swebench.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(verify_swebench.sys, "platform", "darwin")
+    monkeypatch.delenv("CONDA_SUBDIR", raising=False)
+
+    env = verify_swebench._conda_create_env_vars("3.9")
+
+    assert "CONDA_SUBDIR" not in env or env["CONDA_SUBDIR"] != "osx-64"
+
+
+def test_setup_test_env_legacy_python_uses_docker(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    def _fake_run_docker_shell(repo_path, image, shell_command, *, timeout, use_venv=False):
+        calls.append((shell_command, use_venv))
+        return subprocess.CompletedProcess(args=["docker"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(verify_swebench, "_setup_conda_test_env", lambda *args, **kwargs: (None, "conda unavailable"))
+    monkeypatch.setattr(verify_swebench, "_docker_available", lambda: True)
+    monkeypatch.setattr(verify_swebench, "_docker_image_for_python", lambda version: f"python:{version}")
+    monkeypatch.setattr(verify_swebench, "_run_docker_shell", _fake_run_docker_shell)
+
+    env, error = verify_swebench.setup_test_env(
+        tmp_path,
+        "django/django",
+        "3.0",
+        timeout=30,
+    )
+
+    assert error is None
+    assert env is not None
+    assert env.kind == "docker"
+    assert env.python_version == "3.6"
+    assert env.docker_image == "python:3.6"
+    assert calls[0] == (f"python -m venv {verify_swebench.shlex.quote(str(tmp_path / '.venv'))}", False)
+    assert any("python -m pip install --quiet --upgrade" in command for command, _ in calls)
+    assert any("python -m pip install -e ." in command for command, _ in calls)
+
+
+def test_setup_test_env_local_returns_local_environment(tmp_path: Path, monkeypatch) -> None:
+    recorded: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        recorded.append(list(args))
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(verify_swebench.subprocess, "run", _fake_run)
+
+    env, error = verify_swebench.setup_test_env(
+        tmp_path,
+        "sympy/sympy",
+        "1.4",
+        timeout=30,
+    )
+
+    assert error is None
+    assert env is not None
+    assert env.kind == "local"
+    assert env.python_version == "3.9"
+    assert recorded[0][:4] == ["uv", "venv", str(tmp_path / ".venv"), "--python"]
+    assert recorded[1][:4] == ["uv", "pip", "install", "--upgrade"]
+    assert recorded[2][:4] == ["uv", "pip", "install", "-e"]
+
+
+def test_setup_test_env_local_uses_repo_specific_bootstrap_for_astropy(tmp_path: Path, monkeypatch) -> None:
+    recorded: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        recorded.append(list(args))
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(verify_swebench.subprocess, "run", _fake_run)
+
+    env, error = verify_swebench.setup_test_env(
+        tmp_path,
+        "astropy/astropy",
+        "5.2",
+        timeout=30,
+    )
+
+    assert error is None
+    assert env is not None
+    assert env.kind == "local"
+    assert "setuptools<70" in recorded[1]
+    assert "extension-helpers" in recorded[1]
+    assert "--no-build-isolation" in recorded[2]
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +604,62 @@ def test_resolve_test_ids_dotted_path_resolved(tmp_path: Path) -> None:
         tmp_path,
     )
     assert result == ["tests/test_foo.py::TestBar::test_baz"]
+
+
+def test_resolve_test_ids_unittest_style_label_normalized() -> None:
+    result = verify_swebench.resolve_test_ids(
+        ["test_baz (tests.test_foo.TestBar)"],
+        [],
+        Path("/fake"),
+    )
+    assert result == ["tests.test_foo.TestBar.test_baz"]
+
+
+def test_resolve_test_ids_descriptive_label_maps_to_enclosing_test(
+    tmp_path: Path,
+) -> None:
+    test_file = tmp_path / "tests" / "test_foo.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "class TestBar:\n"
+        "    def test_baz(self):\n"
+        "        \"\"\"\n"
+        "        Human readable scenario label\n"
+        "        \"\"\"\n"
+        "        pass\n"
+    )
+
+    result = verify_swebench.resolve_test_ids(
+        ["Human readable scenario label"],
+        ["tests/test_foo.py"],
+        tmp_path,
+    )
+    assert result == ["tests.test_foo.TestBar.test_baz"]
+
+
+def test_resolve_test_ids_descriptive_label_falls_back_to_repo_test_scan(
+    tmp_path: Path,
+) -> None:
+    patched_test = tmp_path / "tests" / "test_patched.py"
+    patched_test.parent.mkdir(parents=True)
+    patched_test.write_text("def test_patched():\n    pass\n")
+
+    unpatched_test = tmp_path / "tests" / "sessions_tests.py"
+    unpatched_test.write_text(
+        "class SessionTests:\n"
+        "    def test_cookie_expiry(self):\n"
+        "        \"\"\"\n"
+        "        Human readable scenario label\n"
+        "        \"\"\"\n"
+        "        pass\n"
+    )
+
+    result = verify_swebench.resolve_test_ids(
+        ["Human readable scenario label"],
+        ["tests/test_patched.py"],
+        tmp_path,
+    )
+    assert result == ["tests.sessions_tests.SessionTests.test_cookie_expiry"]
 
 
 def test_resolve_test_ids_bare_name_unmatched() -> None:

@@ -190,6 +190,44 @@ All coordination is filesystem-based — same approach as Helm.
 
 ---
 
+## Research Queue (2026-03-18)
+
+Recent literature to review, ranked by relevance. Full reports in `shoshin-codex/bookmarks/reports/`.
+
+### Directly actionable
+
+| Report | Why it matters | Action |
+|--------|---------------|--------|
+| `agent-failure-taxonomy-7-patterns.md` | 7 empirical failure modes from 1600+ sessions. Phantom verification, hollow report, shortcut spiral are detectable from traces alone. Multi-agent propagation (one agent's hollow report → another's confidence mirage) unexplored. | Map to trace features → prototype detection as judging dimensions |
+| `openai-argo-interpretable-rubrics-from-reward-models.md` | RL-generated rubrics that audit black-box reward models. Surfaced population bias: generic users reward sycophancy, experts reward calibration. | Apply to Helm's judge pipeline — extract rubrics to verify judges measure what we intend |
+| `nlrl-on-policy-self-distillation-language-rl.md` | 5 groups converging: language feedback replaces scalar rewards. Helm's judge outputs are already language — could feed directly into RL, collapsing judge and training pipelines. SDPO (2601.20802) handles credit assignment for tool use. All papers are single-agent; multi-agent is our gap. | Read SDPO. Design experiment: language judge output as direct RL signal |
+| `steganographic-gap-llm-monitoring-metric.md` | Detects covert encoded reasoning without reference distribution. Agents could hide info in traces/comments/artifacts. Complements Goodfire's frozen-probe (internal) with external output monitoring. | Add as candidate monitoring dimension for inter-agent channels |
+
+### Background — algorithm and training context
+
+| Report | Why it matters | Action |
+|--------|---------------|--------|
+| `state-of-rl-for-reasoning-llms-overview.md` | 10-method overview (REINFORCE → ScaleRL). Post-DeepSeek-R1 trend is critic-free. Dr.GRPO and DAPO fix length bias and entropy collapse. Triangulates with agentic RL survey (what to optimize) and rubric-based RL (what to reward). Blog fetch failed — read original. | Read https://aweers.de/blog/2026/rl-for-llms/ for open problems |
+| `cato-coding-agents-text-optimizers.md` | Agent-based selection replaces hand-designed heuristics (MAP-Elites, Pareto). Beats AlphaEvolve 2/3. Paper not yet public. Readable selection rationale aligns with observability. | Watch for paper drop. Compare against GEPA |
+| `autoresearch-rl-autonomous-rl-post-training.md` | Config-only autoresearch on prime-rl. rollouts=4 > rollouts=8; constant LR > cosine. Validated starting config for prime-rl experiments. | Use best config as starting point |
+
+### Key reports from March 13 batch (still current)
+
+- `agentic-rl-survey.md` — POMDP formalization; credit assignment as primary bottleneck; 4 multi-agent RL approaches
+- `when-multi-agent-helps-vs-hurts.md` — 45% single-agent threshold; 17x error amplification (independent MAS); predictive model R²=0.524
+- `goodfire-interp-scaled-rl.md` — Frozen-probe anti-evasion; 90x cheaper than LLM-as-judge; probe transfer survives RL
+- `claude-code-swarm-protocol-reverse-engineered.md` — TeammateTool internals; WebSocket observation; 5 orchestration patterns
+- `karl-trained-stopping-research-loops.md` — Stopping as behavioral signal; trajectory length distributions; compression as observation point
+
+### Cross-cutting themes
+
+1. **Language as reward** — NLRL + ARGO suggest judge outputs could become training signal directly
+2. **Observable failure modes** — failure taxonomy + steganographic gap give trace-detectable signals
+3. **Autonomy-safety spectrum** — config-only (autoresearch-rl) vs code-editing (Karpathy) vs agent selection (CATO) produce different behavioral signatures
+4. **Population effects** — who provides reward signal shapes what gets learned (ARGO Population A/B)
+
+---
+
 ## Research Notes
 
 ### On "Baseline" Behavior (2026-01-30)

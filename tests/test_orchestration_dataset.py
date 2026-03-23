@@ -17,6 +17,16 @@ def _export_record() -> dict:
         "reward": 0.81,
         "task_verification": {"status": "pass", "score": 1.0},
         "benchmark": {"benchmark_id": "local/swe-smoke"},
+        "matrix": {
+            "matrix_id": "phase1",
+            "condition_id": "wave1-hybrid-3",
+            "architecture_family": "hybrid",
+            "swarm_size": 3,
+            "task_pack": "decomposable_cross_module",
+            "task_structure": "decomposable_cross_module",
+            "prompt_family": "swebench_claude_matrix_v1",
+            "coordination_family": "hybrid_hub_lateral_review_v1",
+        },
         "orchestration": {
             "parallelism_efficiency": {"value": 0.67},
             "coordination_overhead": {"coordination_to_output_ratio": 0.18},
@@ -49,6 +59,7 @@ def test_build_orchestration_training_row_shapes_output() -> None:
     assert "<escalation_route>" in row["question"]
     assert isinstance(row["answer"], dict)
     assert row["answer"]["verification_gate"] == "pass"
+    assert row["info"]["matrix"]["architecture_family"] == "hybrid"
 
 
 def test_normalize_orchestration_record_accepts_prebuilt_rows() -> None:

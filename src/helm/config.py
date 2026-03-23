@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AgentRole(str, Enum):
@@ -40,8 +40,10 @@ class AgentConfig(BaseModel):
 
     id: str
     harness: str = "claude-code"
+    model: str | None = None  # Declared model identity for provenance (e.g. "claude-opus-4-6")
     role: AgentRole | None = None
     system_prompt: str = ""
+    disallowed_tools: list[str] = Field(default_factory=list)
 
 
 class OrchestratorRule(BaseModel):
@@ -86,11 +88,59 @@ class CoordinationPaths(BaseModel):
     reviews: str | None = None
 
 
+class CoordinationChannelMedium(str, Enum):
+    """Transport used for a coordination channel."""
+
+    FILESYSTEM = "filesystem"
+    LIVE_MESSAGE = "live_message"
+
+
+class CoordinationChannelPersistence(str, Enum):
+    """Whether coordination survives beyond the active context window."""
+
+    PERSISTENT = "persistent"
+    EPHEMERAL = "ephemeral"
+
+
+class CoordinationChannelScope(str, Enum):
+    """Audience shape for a coordination channel."""
+
+    TARGETED = "targeted"
+    BROADCAST = "broadcast"
+    SHARED = "shared"
+    MIXED = "mixed"
+
+
+class CoordinationChannelAvailability(str, Enum):
+    """Whether a channel is always present or depends on the harness/runtime."""
+
+    ALWAYS = "always"
+    HARNESS_DEPENDENT = "harness_dependent"
+    EXPERIMENTAL = "experimental"
+
+
+class CoordinationChannelConfig(BaseModel):
+    """A coordination affordance exposed by the experiment condition.
+
+    These fields describe available channels for prompts, analysis, and later
+    telemetry work. They do not by themselves enforce any behavior.
+    """
+
+    id: str
+    medium: CoordinationChannelMedium
+    persistence: CoordinationChannelPersistence
+    scope: CoordinationChannelScope
+    description: str = ""
+    paths: list[str] = Field(default_factory=list)
+    availability: CoordinationChannelAvailability = CoordinationChannelAvailability.ALWAYS
+
+
 class CoordinationConfig(BaseModel):
     """Configuration for inter-agent coordination."""
 
     mechanism: str = "filesystem"
     paths: CoordinationPaths = Field(default_factory=CoordinationPaths)
+    channels: list[CoordinationChannelConfig] = Field(default_factory=list)
     backend_settings: dict[str, Any] = Field(default_factory=dict)
     task_format: str | None = None
     message_format: str | None = None
@@ -100,6 +150,8 @@ class CoordinationConfig(BaseModel):
 class JudgeBackendType(str, Enum):
     """Backend type for the judge."""
 
+    CLAUDE_HEADLESS = "claude-headless"
+    CODEX_HEADLESS = "codex-headless"
     OPENROUTER = "openrouter"
     SDK = "sdk"
 
@@ -107,13 +159,33 @@ class JudgeBackendType(str, Enum):
 class JudgeConfig(BaseModel):
     """Configuration for the evaluation judge.
 
-    Supports two backends:
+    Supports three backends:
+    - claude-headless: uses Claude Code headless via CLI
+    - codex-headless: uses Codex headless via CLI
     - openrouter: calls OpenRouter's OpenAI-compatible API (requires OPENROUTER_API_KEY)
-    - sdk: uses Claude Code headless via SDK (free, uses Claude Code login)
+    - sdk: legacy alias for claude-headless
     """
 
-    backend: JudgeBackendType = JudgeBackendType.SDK
-    model: str = "google/gemini-2.0-flash-001"  # Only used for openrouter backend
+    backend: JudgeBackendType = JudgeBackendType.CLAUDE_HEADLESS
+    model: str | None = None
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend_alias(cls, value: Any) -> Any:
+        if isinstance(value, str) and value.strip().lower() == "sdk":
+            return JudgeBackendType.CLAUDE_HEADLESS
+        return value
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _default_openrouter_model(cls, value: Any, info) -> Any:
+        return value
+
+    @model_validator(mode="after")
+    def _apply_backend_defaults(self) -> "JudgeConfig":
+        if self.backend == JudgeBackendType.OPENROUTER and not self.model:
+            self.model = "google/gemini-2.0-flash-001"
+        return self
 
 
 class EvaluationConfig(BaseModel):
@@ -134,6 +206,7 @@ class BenchmarkConfig(BaseModel):
     example_id: str | None = None
     example_ids: list[str] = Field(default_factory=list)
     max_examples: int | None = None
+    example_metadata: dict[str, Any] = Field(default_factory=dict)
     verifier: dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"populate_by_name": True}
@@ -204,12 +277,43 @@ class LimitsConfig(BaseModel):
             return int(duration)
 
 
+class MatrixMetadata(BaseModel):
+    """Structured metadata for experiment-matrix generated conditions."""
+
+    matrix_id: str
+    condition_id: str
+    base_condition_id: str | None = None
+    harness: str | None = None
+    architecture_family: str
+    swarm_size: int
+    task_pack: str
+    task_structure: str
+    prompt_family: str
+    coordination_family: str
+    replication_index: int = 1
+    replication_count: int = 1
+    turn_limit_variant: int | None = None
+
+
+class PairedEvaluationMetadata(BaseModel):
+    """Metadata describing a paired-run comparison design."""
+
+    comparison_id: str
+    comparison_role: str
+    comparison_axis: str = "monitoring-evasion"
+    visible_monitoring: bool | None = None
+    partner_condition_id: str | None = None
+    notes: str | None = None
+
+
 class ExperimentMetadata(BaseModel):
     """Metadata about the experiment pattern."""
 
     created: str | None = None
     author: str | None = None
     version: int = 1
+    matrix: MatrixMetadata | None = None
+    paired_evaluation: PairedEvaluationMetadata | None = None
 
     @field_validator("created", mode="before")
     @classmethod
@@ -267,6 +371,26 @@ class ExperimentConfig(BaseModel):
     def is_hub_and_spoke(self) -> bool:
         """Check if this is a hub-and-spoke pattern."""
         return any(agent.role == AgentRole.HUB for agent in self.agents)
+
+    def topology_label(self) -> str:
+        """Return the experiment topology label used in metadata and prompts."""
+        if len(self.agents) <= 1:
+            return "single-agent"
+        if self.is_hub_and_spoke():
+            return "hub-and-spoke"
+        return "peer-network"
+
+    def matrix_metadata(self) -> dict[str, Any] | None:
+        """Return matrix metadata as a plain dict when present."""
+        if self.metadata.matrix is None:
+            return None
+        return self.metadata.matrix.model_dump()
+
+    def paired_evaluation_metadata(self) -> dict[str, Any] | None:
+        """Return paired-evaluation metadata as a plain dict when present."""
+        if self.metadata.paired_evaluation is None:
+            return None
+        return self.metadata.paired_evaluation.model_dump(exclude_none=True)
 
     def get_hub_agent(self) -> AgentConfig | None:
         """Get the hub agent if this is hub-and-spoke."""

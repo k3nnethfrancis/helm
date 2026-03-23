@@ -45,6 +45,7 @@ def build_benchmark_run_plan(
         config.benchmark.example_id = example.example_id
         config.benchmark.example_ids = [example.example_id]
         config.benchmark.max_examples = 1
+        config.benchmark.example_metadata = dict(example.metadata)
 
         suffix = _sanitize_for_name(example.example_id)
         config.name = f"{base_config.name}-{suffix}"
@@ -58,4 +59,3 @@ def build_benchmark_run_plan(
         )
 
     return planned
-

@@ -18,8 +18,8 @@ bin/
 # macOS
 .DS_Store
 
-# Experiment run artifacts
-experiments/
+# Raw experiment run data (large, iterative — not for sharing)
+runs/
 
 # Internal planning docs and review artifacts
 plan.md

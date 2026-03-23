@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from helm.collector import extract_agent_transcript
+
 
 def _parse_ts(value: Any) -> datetime | None:
     if not isinstance(value, str):
@@ -176,6 +178,9 @@ def build_training_record(
     if not assistant_output:
         assistant_output = "[NO_ASSISTANT_OUTPUT]"
     reward, components = compute_composite_reward(run_data)
+    matrix = experiment.get("matrix")
+    if not isinstance(matrix, dict):
+        matrix = None
 
     return {
         "id": experiment.get("id"),
@@ -186,8 +191,101 @@ def build_training_record(
         "reward": reward,
         "reward_components": components,
         "run_success": run.get("success"),
+        "run_outcome": run.get("outcome"),
+        "termination_reason": run.get("termination_reason"),
+        "run_system_failure": run.get("system_failure"),
         "task_verification": run.get("task_verification"),
         "orchestration_policy_trace": policy_trace,
         "benchmark": provenance.get("benchmark"),
+        "matrix": matrix,
         "orchestration": run_data.get("evals", {}).get("orchestration"),
     }
+
+
+def build_per_agent_training_records(
+    run_data: dict[str, Any],
+    transcript: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build one training record per agent from a multi-agent experiment.
+
+    Each record contains the agent's individual trace (their events only),
+    tagged with their role and the experiment's shared reward.
+
+    Reward attribution: all agents receive the same composite reward.
+    This is a simplification — reward attribution across agents is an open
+    research question. Shared reward is a valid starting point that lets us
+    begin training while deferring credit assignment to future work.
+    """
+    agents_data = transcript.get("agents", {})
+    if not isinstance(agents_data, dict) or not agents_data:
+        return []
+
+    experiment = run_data.get("experiment", {})
+    if not isinstance(experiment, dict):
+        experiment = {}
+    run = run_data.get("run", {})
+    if not isinstance(run, dict):
+        run = {}
+    provenance = run_data.get("provenance", {})
+    if not isinstance(provenance, dict):
+        provenance = {}
+
+    task = experiment.get("task")
+    if not isinstance(task, str):
+        task = ""
+
+    # Shared reward — same for all agents in the experiment
+    reward, components = compute_composite_reward(run_data)
+
+    # Extract agent metadata from experiment config
+    agent_meta: dict[str, dict[str, Any]] = {}
+    exp_agents = experiment.get("agents", [])
+    if isinstance(exp_agents, list):
+        for a in exp_agents:
+            if isinstance(a, dict) and isinstance(a.get("id"), str):
+                agent_meta[a["id"]] = a
+
+    topology = experiment.get("pattern", "unknown")
+    matrix = experiment.get("matrix")
+    if not isinstance(matrix, dict):
+        matrix = None
+
+    records: list[dict[str, Any]] = []
+    for agent_id in agents_data:
+        agent_transcript = extract_agent_transcript(transcript, agent_id)
+        if agent_transcript is None:
+            continue
+
+        agent_output = extract_last_assistant_text(agent_transcript)
+        if not agent_output:
+            agent_output = "[NO_ASSISTANT_OUTPUT]"
+
+        meta = agent_meta.get(agent_id, {})
+
+        records.append({
+            "id": f"{experiment.get('id')}:{agent_id}",
+            "experiment_id": experiment.get("id"),
+            "agent_id": agent_id,
+            "agent_role": meta.get("role"),
+            "agent_harness": meta.get("harness"),
+            "agent_model": meta.get("model"),
+            "topology": topology,
+            "messages": [
+                {"role": "user", "content": task},
+                {"role": "assistant", "content": agent_output},
+            ],
+            "trace": agent_transcript,
+            "reward": reward,
+            "reward_components": components,
+            "reward_attribution": "shared",
+            "run_success": run.get("success"),
+            "run_outcome": run.get("outcome"),
+            "termination_reason": run.get("termination_reason"),
+            "run_system_failure": run.get("system_failure"),
+            "task_verification": run.get("task_verification"),
+            "benchmark": provenance.get("benchmark"),
+            "matrix": matrix,
+            "orchestration": run_data.get("evals", {}).get("orchestration"),
+        })
+
+    return records

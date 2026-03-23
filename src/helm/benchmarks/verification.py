@@ -30,14 +30,33 @@ class TaskVerification:
         }
 
 
-def _completion_verification(success: bool, error: str | None) -> TaskVerification:
+def _completion_verification(
+    success: bool,
+    error: str | None,
+    *,
+    run_outcome: str | None = None,
+    run_message: str | None = None,
+    run_system_failure: bool | None = None,
+) -> TaskVerification:
     status = "pass" if success else "fail"
     score = 1.0 if success else 0.0
-    reason = (
-        "Run reached completion signals."
-        if success
-        else f"Run failed before completion signals: {error or 'unknown error'}"
-    )
+    if success:
+        reason = "Run reached completion signals."
+    elif run_outcome == "incomplete":
+        reason = (
+            "Run ended incomplete before completion signals: "
+            f"{run_message or error or 'budget or stop condition reached'}"
+        )
+    elif run_outcome == "paused":
+        reason = (
+            "Run paused before completion signals: "
+            f"{run_message or error or 'human input required'}"
+        )
+    else:
+        reason = (
+            "Run failed before completion signals: "
+            f"{error or run_message or 'unknown error'}"
+        )
     return TaskVerification(
         status=status,
         score=score,
@@ -45,6 +64,9 @@ def _completion_verification(success: bool, error: str | None) -> TaskVerificati
         details={
             "mode": "completion",
             "run_success": success,
+            "run_outcome": run_outcome,
+            "run_message": run_message,
+            "run_system_failure": run_system_failure,
             "run_error": error,
         },
     )
@@ -90,10 +112,12 @@ def _command_verification(
     for key, value in context.items():
         rendered = rendered.replace(f"{{{key}}}", str(value))
 
+    verifier_cwd = Path.cwd()
+
     proc = subprocess.run(
         rendered,
         shell=True,
-        cwd=str(experiment_dir),
+        cwd=str(verifier_cwd),
         capture_output=True,
         text=True,
     )
@@ -116,6 +140,7 @@ def _command_verification(
             {
                 "mode": "command",
                 "command": rendered,
+                "working_dir": str(verifier_cwd),
                 "returncode": proc.returncode,
                 "stdout": proc.stdout.strip(),
                 "stderr": proc.stderr.strip(),
@@ -142,6 +167,7 @@ def _command_verification(
         details={
             "mode": "command",
             "command": rendered,
+            "working_dir": str(verifier_cwd),
             "returncode": proc.returncode,
             "stdout": proc.stdout.strip(),
             "stderr": proc.stderr.strip(),
@@ -156,12 +182,21 @@ def verify_benchmark_run(
     experiment_dir: Path,
     run_success: bool,
     run_error: str | None,
+    run_outcome: str | None = None,
+    run_message: str | None = None,
+    run_system_failure: bool | None = None,
 ) -> TaskVerification:
     """Verify benchmark run and return normalized task verification payload."""
     mode = benchmark.verifier_mode()
     if mode == "command":
         return _command_verification(benchmark, example, experiment_dir)
-    return _completion_verification(run_success, run_error)
+    return _completion_verification(
+        run_success,
+        run_error,
+        run_outcome=run_outcome,
+        run_message=run_message,
+        run_system_failure=run_system_failure,
+    )
 
 
 def write_task_verification(

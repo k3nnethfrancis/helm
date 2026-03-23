@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import time
 import uuid
@@ -19,12 +20,19 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+logger = logging.getLogger(__name__)
+
+from helm.benchmarks import get_adapter
+from helm.benchmarks.swebench_workspace import canonical_workspace_repo, stage_repo_in_workspace
 from helm.collector import EventCollector
 from helm.config import AgentConfig, ExperimentConfig
 from helm.coordination import CoordinationBackend, CoordinationMessage, create_backend
 from helm.runtime_guard import RuntimeGuard
 from helm.run_data import save_run_data
-from helm.sdk import SDKClient, SDKConfig, SDKEvent, SessionConfig
+from helm.sdk import (
+    DirectCLIClient, SDKClient, SDKConfig, SDKEvent, SessionConfig,
+    _HARNESS_ADAPTERS,
+)
 
 
 @dataclass
@@ -34,11 +42,27 @@ class ExperimentResult:
     experiment_id: str
     experiment_name: str
     success: bool
+    outcome: str
+    termination_reason: str
+    system_failure: bool
     start_time: datetime
     end_time: datetime
     transcript_path: Path | None = None
+    message: str | None = None
     error: str | None = None
     agent_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ExperimentOutcome:
+    """Structured outcome for the end of a run."""
+
+    success: bool
+    outcome: str
+    termination_reason: str
+    system_failure: bool
+    message: str | None = None
+    error: str | None = None
 
 
 class Experiment:
@@ -51,17 +75,19 @@ class Experiment:
         experiments_dir: Path,
         on_escalate: Callable[[str, SDKEvent, Any], None] | None = None,
         on_turn_limit: Callable[[str, int, int], tuple[str, int | None]] | None = None,
+        use_direct_cli: bool | None = None,
     ):
         self.config = config
         self.sdk_binary_path = sdk_binary_path
         self.experiments_dir = experiments_dir
         self.on_escalate = on_escalate
         self.on_turn_limit = on_turn_limit
+        self._use_direct_cli = use_direct_cli
 
         self.experiment_id = f"{config.name}-{uuid.uuid4().hex[:8]}"
         self.experiment_dir = experiments_dir / self.experiment_id
 
-        self._sdk: SDKClient | None = None
+        self._sdk: SDKClient | DirectCLIClient | None = None
         self._backend: CoordinationBackend | None = None
         self._orchestrator: RuntimeGuard | None = None
         self._collector: EventCollector | None = None
@@ -74,6 +100,7 @@ class Experiment:
         self._task: str | None = None
         self._ended_by_turn_limit = False
         self._escalations: list[dict[str, Any]] = []
+        self._benchmark_workdir: Path | None = None
 
         # Per-agent turn limits (None = no limit / run indefinitely)
         self._agent_turn_limits: dict[str, int | None] = {
@@ -122,6 +149,21 @@ class Experiment:
         # Pass through as-is and let SDK validate/accept it.
         return normalized
 
+    def _should_use_direct_cli(self) -> bool:
+        """Decide whether to use DirectCLIClient instead of the SDK daemon.
+
+        Auto-selects DirectCLIClient when all agents have a registered
+        harness adapter (claude, codex, etc.).  Falls back to the SDK
+        daemon only for unknown harnesses.
+        Can be overridden via the ``use_direct_cli`` constructor parameter.
+        """
+        if self._use_direct_cli is not None:
+            return self._use_direct_cli
+        return all(
+            self._resolve_session_agent(a.harness) in _HARNESS_ADAPTERS
+            for a in self.config.agents
+        )
+
     async def setup(self) -> None:
         """Set up the experiment environment."""
         # Create experiment-owned directories
@@ -131,6 +173,7 @@ class Experiment:
 
         # Stage workspace files from config
         await self._stage_workspace_files()
+        await self._prepare_benchmark_workspace()
 
         # Initialize coordination backend (owns coordination/ directories)
         agent_ids = [a.id for a in self.config.agents]
@@ -147,9 +190,15 @@ class Experiment:
         coord_backend_config["hub_agent_id"] = hub.id if hub else None
         await self._backend.setup(self.experiment_dir, agent_ids, coord_backend_config)
 
-        # Start SDK daemon
-        sdk_config = SDKConfig(binary_path=self.sdk_binary_path)
-        self._sdk = SDKClient(sdk_config)
+        # Write topology enforcement config for helm-agent CLI
+        self._write_helm_config()
+
+        # Select agent backend
+        if self._should_use_direct_cli():
+            self._sdk = DirectCLIClient()
+        else:
+            sdk_config = SDKConfig(binary_path=self.sdk_binary_path)
+            self._sdk = SDKClient(sdk_config)
         await self._sdk.start()
 
         # Initialize collector
@@ -197,7 +246,8 @@ class Experiment:
         session_config = SessionConfig(
             agent=session_agent,
             permission_mode="bypass",
-            cwd=str(self.experiment_dir),
+            cwd=str(self._session_working_directory()),
+            disallowed_tools=agent.disallowed_tools,
         )
 
         await self._sdk.create_session(session_id, session_config)
@@ -237,6 +287,102 @@ class Experiment:
                         f"Workspace file source not found: {source}"
                     )
                 shutil.copy2(src_path, dest)
+
+    async def _prepare_benchmark_workspace(self) -> None:
+        """Stage benchmark-specific workspace state before agents start."""
+        benchmark = self.config.benchmark
+        if benchmark is None or benchmark.adapter != "swebench":
+            self._benchmark_workdir = None
+            return
+
+        row = self._resolve_benchmark_example_metadata()
+        repo = row.get("repo")
+        base_commit = row.get("base_commit")
+        if not isinstance(repo, str) or not repo.strip():
+            raise ValueError("SWE-bench benchmark example metadata missing repo")
+        if not isinstance(base_commit, str) or not base_commit.strip():
+            raise ValueError("SWE-bench benchmark example metadata missing base_commit")
+
+        self._benchmark_workdir = stage_repo_in_workspace(
+            repo.strip(),
+            base_commit.strip(),
+            self.experiment_dir,
+        )
+
+    def _resolve_benchmark_example_metadata(self) -> dict[str, Any]:
+        """Load benchmark example metadata for the selected run."""
+        benchmark = self.config.benchmark
+        if benchmark is None:
+            return {}
+        if benchmark.example_metadata:
+            return dict(benchmark.example_metadata)
+
+        adapter = get_adapter(benchmark.adapter)
+        examples = adapter.load_examples(benchmark, limit=1)
+        if not examples:
+            raise ValueError(
+                f"No benchmark example found for adapter={benchmark.adapter} "
+                f"and ids={benchmark.selected_example_ids()}"
+            )
+        metadata = dict(examples[0].metadata)
+        benchmark.example_metadata = metadata
+        return metadata
+
+    def _write_helm_config(self) -> None:
+        """Write .helm-config.json for the helm-agent CLI to read."""
+        coord_dir = self.experiment_dir / "coordination"
+        coord_dir.mkdir(parents=True, exist_ok=True)
+
+        # Determine family from matrix metadata or pattern name
+        family = "unknown"
+        if self.config.metadata and self.config.metadata.matrix:
+            family = self.config.metadata.matrix.architecture_family
+        elif self.config.name:
+            for f in ("single", "centralized", "decentralized", "hybrid", "independent", "delegating"):
+                if f in self.config.name:
+                    family = f
+                    break
+
+        hub = self.config.get_hub_agent()
+        hub_id = hub.id if hub else None
+        worker_ids = [a.id for a in self.config.agents if a.id != hub_id]
+
+        agents_config: dict = {}
+        for agent in self.config.agents:
+            role = agent.role.value if agent.role else "peer"
+            can_spawn = "Agent" not in agent.disallowed_tools
+            # Build messaging rules based on topology
+            if family == "centralized" and role == "worker":
+                can_message = [hub_id] if hub_id else []
+            elif family == "centralized" and role == "hub":
+                can_message = worker_ids
+            elif family in ("decentralized", "hybrid"):
+                can_message = [a.id for a in self.config.agents if a.id != agent.id]
+            else:
+                can_message = []
+
+            agents_config[agent.id] = {
+                "role": role,
+                "can_spawn": can_spawn,
+                "can_message": can_message,
+            }
+
+        config_data = {
+            "family": family,
+            "experiment_id": self.experiment_id,
+            "harness": self.config.agents[0].harness if self.config.agents else "claude-code",
+            "agents": agents_config,
+            "disallowed_tools_base": ["Agent", "TeamCreate", "SendMessage"],
+            "max_spawn_depth": 1,
+        }
+
+        config_path = coord_dir / ".helm-config.json"
+        with open(config_path, "w") as f:
+            json.dump(config_data, f, indent=2)
+
+    def _session_working_directory(self) -> Path:
+        """Return the working directory that agent sessions should start in."""
+        return self._benchmark_workdir or self.experiment_dir
 
     async def run(self, task: str) -> ExperimentResult:
         """Run the experiment with the given task.
@@ -285,24 +431,39 @@ class Experiment:
             await self._wait_for_completion(timeout)
 
             self._end_time = datetime.now()
-            error = self._determine_run_error()
-            if error is not None:
-                result = self._build_result(success=False, error=error)
-                self._save_metadata(result)
-                return result
-            else:
-                result = self._build_result(success=True)
-                self._save_metadata(result)
-                return result
+            outcome = self._determine_run_outcome()
+            result = self._build_result(
+                success=outcome.success,
+                outcome=outcome.outcome,
+                termination_reason=outcome.termination_reason,
+                system_failure=outcome.system_failure,
+                message=outcome.message,
+                error=outcome.error,
+            )
+            self._save_metadata(result)
+            return result
 
         except asyncio.TimeoutError:
             self._end_time = datetime.now()
-            result = self._build_result(success=False, error="Timeout exceeded")
+            result = self._build_result(
+                success=False,
+                outcome="incomplete",
+                termination_reason="timeout",
+                system_failure=False,
+                message="Timeout reached before completion signals were observed.",
+            )
             self._save_metadata(result)
             return result
         except Exception as e:
             self._end_time = datetime.now()
-            result = self._build_result(success=False, error=str(e))
+            result = self._build_result(
+                success=False,
+                outcome="failed",
+                termination_reason="exception",
+                system_failure=True,
+                message="Experiment failed with an unexpected exception.",
+                error=str(e),
+            )
             self._save_metadata(result)
             return result
 
@@ -317,18 +478,26 @@ class Experiment:
             raise RuntimeError("SDK not initialized")
 
         session_id = self._agent_sessions[agent.id]
+        working_dir = self._session_working_directory()
 
         # Build context-rich message
         context = f"""## Environment
-Working directory: {self.experiment_dir}
+Working directory: {working_dir}
 Your agent ID: {agent.id}
 Coordination directory: {self.experiment_dir / 'coordination'}
 Workspace directory: {self.experiment_dir / 'workspace'}
 
 """
+        if self._benchmark_workdir is not None:
+            context += (
+                f"Benchmark repository directory: {self._benchmark_workdir}\n\n"
+            )
         # Prepend system prompt if provided
         if agent.system_prompt:
             context = f"{agent.system_prompt}\n\n---\n\n{context}"
+
+        # Auto-inject swarm context so agents always know their multi-agent situation
+        context += self._build_swarm_context(agent)
 
         # Append backend-specific coordination instructions
         if self._backend:
@@ -338,11 +507,54 @@ Workspace directory: {self.experiment_dir / 'workspace'}
 
         message = f"{context}## Task\n{task}"
 
-        # Start event stream
+        # Send the task (for DirectCLI, this spawns the subprocess)
+        await self._sdk.post_message(session_id, message)
+
+        # Start event stream (must happen after post_message for DirectCLI
+        # since the subprocess doesn't exist until the message is sent)
         asyncio.create_task(self._stream_agent_events(agent.id, session_id))
 
-        # Send the task
-        await self._sdk.post_message(session_id, message)
+    def _build_swarm_context(self, agent: AgentConfig) -> str:
+        """Build swarm context block that tells the agent about its multi-agent situation.
+
+        Auto-injected by the framework so agents always know:
+        - How many agents are in the swarm
+        - Who their peers are and what roles they play
+        - What coordination mechanism is in use
+        - Which topology they're operating in
+        """
+        topology = self.config.topology_label()
+        total = len(self.config.agents)
+
+        peers: list[str] = []
+        for a in self.config.agents:
+            if a.id == agent.id:
+                continue
+            role_label = a.role.value if a.role else "peer"
+            peers.append(f"- {a.id} ({role_label})")
+
+        peer_list = "\n".join(peers) if peers else "- (none — you are the only agent)"
+
+        if total <= 1:
+            return f"""## Execution Context
+You are operating as a single agent.
+Topology: {topology}
+Coordination mechanism: {self.config.coordination.mechanism}
+
+Peer agents:
+{peer_list}
+
+"""
+
+        return f"""## Swarm Context
+You are part of a multi-agent system with {total} agent(s).
+Topology: {topology}
+Coordination mechanism: {self.config.coordination.mechanism}
+
+Your peers:
+{peer_list}
+
+"""
 
     async def _stream_agent_events(self, agent_id: str, session_id: str) -> None:
         """Stream and process events from an agent."""
@@ -503,11 +715,16 @@ Workspace directory: {self.experiment_dir / 'workspace'}
 
         if self._sdk:
             # Terminate all sessions
-            for session_id in self._agent_sessions.values():
+            for agent_id, session_id in self._agent_sessions.items():
                 try:
                     await self._sdk.terminate_session(session_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        "Session termination failed for agent %s (session %s): %s",
+                        agent_id,
+                        session_id,
+                        e,
+                    )
 
             await self._sdk.dispose()
 
@@ -529,31 +746,68 @@ Workspace directory: {self.experiment_dir / 'workspace'}
         """Signal the experiment to stop."""
         self._stop_event.set()
 
-    def _determine_run_error(self) -> str | None:
-        """Determine whether run termination should be considered a failure."""
+    def _determine_run_outcome(self) -> ExperimentOutcome:
+        """Determine structured run outcome and whether it is a system failure."""
         if self._stream_errors:
             details = "; ".join(
                 f"{agent}: {error}" for agent, error in sorted(self._stream_errors.items())
             )
-            return f"Event stream failed: {details}"
+            return ExperimentOutcome(
+                success=False,
+                outcome="failed",
+                termination_reason="stream_error",
+                system_failure=True,
+                message=f"Event stream failed: {details}",
+                error=f"Event stream failed: {details}",
+            )
 
         if self._escalations:
             escalation = self._escalations[0]
             reason = escalation.get("reason") or "human input required"
-            return (
-                "Escalation required human input and execution was paused. "
-                f"First escalation: {reason}"
+            return ExperimentOutcome(
+                success=False,
+                outcome="paused",
+                termination_reason="human_escalation",
+                system_failure=False,
+                message=(
+                    "Escalation required human input and execution was paused. "
+                    f"First escalation: {reason}"
+                ),
             )
 
         if self._ended_by_turn_limit:
-            return "Turn limit reached; experiment ended before completion."
+            return ExperimentOutcome(
+                success=False,
+                outcome="incomplete",
+                termination_reason="turn_limit",
+                system_failure=False,
+                message="Turn limit reached before completion signals were observed.",
+            )
 
         if not self._all_agents_done():
             if self._stop_event.is_set():
-                return "Experiment stopped before completion signals were observed."
-            return "Experiment ended before completion signals were observed."
+                return ExperimentOutcome(
+                    success=False,
+                    outcome="incomplete",
+                    termination_reason="stopped",
+                    system_failure=False,
+                    message="Experiment stopped before completion signals were observed.",
+                )
+            return ExperimentOutcome(
+                success=False,
+                outcome="incomplete",
+                termination_reason="missing_completion_signal",
+                system_failure=False,
+                message="Experiment ended before completion signals were observed.",
+            )
 
-        return None
+        return ExperimentOutcome(
+            success=True,
+            outcome="completed",
+            termination_reason="completion_signal",
+            system_failure=False,
+            message="Run reached completion signals.",
+        )
 
     def _handle_escalation(self, agent_id: str, event: SDKEvent, rule: Any) -> None:
         """Handle escalation events by recording and pausing the run."""
@@ -581,12 +835,15 @@ Workspace directory: {self.experiment_dir / 'workspace'}
         metadata: dict[str, Any] = {
             "experiment_id": self.experiment_id,
             "experiment_name": self.config.name,
-            "pattern": "hub-and-spoke" if self.config.is_hub_and_spoke() else "peer-network",
+            "pattern": self.config.topology_label(),
+            "matrix": self.config.matrix_metadata(),
+            "paired_evaluation": self.config.paired_evaluation_metadata(),
             "agents": [
                 {
                     "id": a.id,
                     "role": a.role.value if a.role else None,
                     "harness": a.harness,
+                    "model": a.model,
                 }
                 for a in self.config.agents
             ],
@@ -623,7 +880,13 @@ Workspace directory: {self.experiment_dir / 'workspace'}
                 "example_id": self.config.benchmark.example_id,
                 "example_ids": selected_example_ids,
                 "max_examples": self.config.benchmark.max_examples,
+                "example_metadata": self.config.benchmark.example_metadata,
                 "verifier": self.config.benchmark.verifier,
+                "workspace_repo": (
+                    str(canonical_workspace_repo(self.experiment_dir))
+                    if self._benchmark_workdir is not None
+                    else None
+                ),
             }
 
         if self._task is not None:
@@ -649,9 +912,13 @@ Workspace directory: {self.experiment_dir / 'workspace'}
 
             metadata["run"] = {
                 "success": result.success,
+                "outcome": result.outcome,
+                "termination_reason": result.termination_reason,
+                "system_failure": result.system_failure,
                 "start_time": result.start_time.isoformat(),
                 "end_time": result.end_time.isoformat(),
                 "duration_seconds": (result.end_time - result.start_time).total_seconds(),
+                "message": result.message,
                 "error": result.error,
                 "benchmark": benchmark_run,
                 "agent_stats": result.agent_stats,
@@ -670,6 +937,10 @@ Workspace directory: {self.experiment_dir / 'workspace'}
     def _build_result(
         self,
         success: bool,
+        outcome: str,
+        termination_reason: str,
+        system_failure: bool,
+        message: str | None = None,
         error: str | None = None,
     ) -> ExperimentResult:
         """Build the experiment result."""
@@ -688,9 +959,13 @@ Workspace directory: {self.experiment_dir / 'workspace'}
             experiment_id=self.experiment_id,
             experiment_name=self.config.name,
             success=success,
+            outcome=outcome,
+            termination_reason=termination_reason,
+            system_failure=system_failure,
             start_time=self._start_time or datetime.now(),
             end_time=self._end_time or datetime.now(),
             transcript_path=transcript_path,
+            message=message,
             error=error,
             agent_stats=agent_stats,
         )
@@ -703,6 +978,7 @@ async def run_experiment(
     experiments_dir: Path,
     on_escalate: Callable[[str, SDKEvent, Any], None] | None = None,
     on_turn_limit: Callable[[str, int, int], tuple[str, int | None]] | None = None,
+    use_direct_cli: bool | None = None,
 ) -> ExperimentResult:
     """Run an experiment from a config file."""
     config = ExperimentConfig.from_yaml(config_path)
@@ -714,6 +990,7 @@ async def run_experiment(
         experiments_dir=experiments_dir,
         on_escalate=on_escalate,
         on_turn_limit=on_turn_limit,
+        use_direct_cli=use_direct_cli,
     )
 
 
@@ -724,6 +1001,7 @@ async def run_experiment_with_config(
     experiments_dir: Path,
     on_escalate: Callable[[str, SDKEvent, Any], None] | None = None,
     on_turn_limit: Callable[[str, int, int], tuple[str, int | None]] | None = None,
+    use_direct_cli: bool | None = None,
 ) -> ExperimentResult:
     """Run an experiment from an in-memory config object."""
 
@@ -733,6 +1011,7 @@ async def run_experiment_with_config(
         experiments_dir=experiments_dir,
         on_escalate=on_escalate,
         on_turn_limit=on_turn_limit,
+        use_direct_cli=use_direct_cli,
     )
 
     try:
@@ -740,4 +1019,7 @@ async def run_experiment_with_config(
         result = await experiment.run(task)
         return result
     finally:
-        await experiment.teardown()
+        try:
+            await experiment.teardown()
+        except Exception as e:
+            logger.warning("Experiment teardown failed: %s", e)

@@ -46,6 +46,10 @@ Categorize the system's resource efficiency into one of the categories below.
 - Excessive back-and-forth that doesn't advance the task
 - Tool calls are repeated needlessly (same file read multiple times, same command run again)
 
+## Single-Agent Handling
+
+For **single-agent runs**: evaluate the efficiency of the agent's own approach. If the agent solves the task without significant wasted exploration or redundant operations, score as **efficient** or **minor-waste**. Single agents cannot have coordination overhead or duplication across agents — evaluate only their operational efficiency.
+
 ## What to Look For
 
 ### Signs of Efficiency

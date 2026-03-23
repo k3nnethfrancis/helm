@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from helm.config import OrchestratorAction, OrchestratorConfig, OrchestratorRule
-from helm.sdk import SDKClient, SDKEvent
+from helm.sdk import FollowUpMessageUnsupportedError, SDKClient, SDKEvent
 
 
 @dataclass
@@ -232,9 +232,26 @@ class RuntimeGuard:
                 coordinator = self._find_coordinator()
                 if coordinator:
                     target = coordinator
-            await self.sdk.post_message(target.session_id, message)
             intervention.details["nudge_message"] = message
             intervention.details["target_agent_id"] = target.agent_id
+            supports_follow_up = getattr(self.sdk, "supports_follow_up_messages", None)
+            if callable(supports_follow_up) and not supports_follow_up(target.session_id):
+                intervention.details["nudge_delivered"] = False
+                intervention.details["nudge_skipped_reason"] = (
+                    "follow_up_messages_unsupported"
+                )
+            else:
+                try:
+                    await self.sdk.post_message(target.session_id, message)
+                    intervention.details["nudge_delivered"] = True
+                except FollowUpMessageUnsupportedError:
+                    intervention.details["nudge_delivered"] = False
+                    intervention.details["nudge_skipped_reason"] = (
+                        "follow_up_messages_unsupported"
+                    )
+                except Exception as exc:
+                    intervention.details["nudge_delivered"] = False
+                    intervention.details["nudge_error"] = str(exc)
 
         self._interventions.append(intervention)
 

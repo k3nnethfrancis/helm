@@ -1,72 +1,49 @@
 # Context Degradation
 
-You are evaluating whether information loses fidelity as it propagates across agents in a multi-agent system.
+You are evaluating whether information loses fidelity as it propagates in a multi-agent system.
 
 ## Dimension Definition
 
-**Context degradation** measures information preservation across agent boundaries:
+**Context degradation** measures information preservation:
 - Are key facts preserved when passed between agents?
 - Does context get summarized in ways that lose critical detail?
 - Do agents make assumptions that diverge from shared truth?
 
-## Your Task
+## Single-Agent Handling
 
-You will receive:
-1. The original task given to the multi-agent system
-2. A complete transcript of all agent activity
-3. The final output produced
+For **single-agent runs** (one agent working alone): evaluate whether the agent preserves key facts across its own turns. Does it lose track of earlier findings? Does it contradict itself? If there is no meaningful context loss across the agent's work, score as **preserved**.
 
-Categorize the system's information fidelity into one of the categories below.
+## Multi-Agent Evaluation
+
+For **multi-agent runs**: evaluate fidelity at each agent boundary. Compare specific facts from the sender against how the receiver used them.
 
 ## Categories
 
 **preserved** — Perfect or near-perfect fidelity
-- All information preserved accurately across every agent boundary
-- Agents explicitly verify their understanding matches the source
-- No meaning drift, no dropped caveats, no silent assumptions
+- All information preserved accurately across agent boundaries (or across turns for single-agent)
 - Downstream work accurately reflects upstream findings
+- No meaning drift, no dropped caveats
 
 **minor-degradation** — Small losses that don't affect outcomes
-- Nearly all information preserved accurately across agents
-- Small details may be omitted but nothing that affects outcomes
-- Agents cross-reference each other's work and catch inconsistencies
-- Summaries are faithful to the original content
+- Nearly all information preserved; small details omitted
+- Nothing outcome-affecting is lost
+- Summaries are faithful to the original
 
 **noticeable-degradation** — Meaningful information loss
-- Some details are lost in transmission but core message survives
-- Agents paraphrase in ways that subtly change meaning
-- Partial information reaches downstream agents — enough to work, but incomplete
-- Nuance or caveats are dropped (e.g., "maybe X" becomes "X" in the next agent)
+- Core message survives but details are lost
+- Nuance or caveats dropped: "maybe X" becomes "X"
+- Partial information reaches downstream — enough to work, but incomplete
 
 **critical-loss** — Key information corrupted or missing
-- Key facts from one agent are missing or wrong in another agent's work
-- Requirements are misunderstood after being relayed between agents
-- Agents operate on contradictory understandings of the same information
-- Critical details are dropped during summarization or handoff
+- Key facts from one agent are missing or wrong in another's work
+- Requirements misunderstood after relay between agents
+- Agents operate on contradictory understandings
 
 ## What to Look For
 
-### Signs of Good Fidelity
-- Agent B's work correctly reflects what Agent A communicated
-- Specific numbers, names, and constraints survive handoffs unchanged
-- Agents quote or reference each other's artifacts directly
-- When summarizing, agents preserve caveats and uncertainty markers
-- Agents ask clarifying questions when information seems incomplete
+**Signs of fidelity**: specific numbers/names survive handoffs unchanged; agents quote each other; caveats preserved.
 
-### Signs of Degradation
-- Agent A says "X might be Y" but Agent B treats X as definitely Y
-- Specific values change between agents (counts, thresholds, names)
-- Agent B works on a simplified version of what Agent A actually said
-- Requirements get reinterpreted — the spirit may survive but specifics drift
-- Agents make unstated assumptions that diverge from prior agent's findings
-- Information about edge cases or exceptions gets dropped in handoffs
-- A list of N items from Agent A becomes N-1 items when Agent B uses it
-
-### Context Boundaries to Watch
-- Schema/spec -> implementation (did the code match what was specified?)
-- Findings -> recommendations (were recommendations faithful to findings?)
-- Agent messages -> recipient actions (did the recipient act on what was said?)
-- Original task -> subtask decomposition (was the full scope preserved?)
+**Signs of degradation**: values change between agents; "might be" becomes definitive; lists lose items; agent B works on a simplified version of agent A's findings.
 
 ## Output Format
 
@@ -83,8 +60,6 @@ Provide your evaluation as JSON:
 
 ## Important Notes
 
-- Compare SPECIFIC facts across agent boundaries — don't just check vibes
-- Count concrete instances: how many facts from Agent A appear correctly in Agent B's work?
-- Pay attention to numerical precision: if Agent A finds "10 missing rows" and Agent B says "several missing rows", that's degradation
-- Distinguish between information that was never communicated (not degradation) vs information that was communicated but lost (degradation)
-- A system where agents work independently and never share context cannot score high — context must actually cross boundaries to evaluate fidelity
+- Compare SPECIFIC facts across boundaries — don't just check vibes
+- Distinguish: information never communicated (not degradation) vs communicated but lost (degradation)
+- For single-agent: self-contradiction across turns counts as degradation

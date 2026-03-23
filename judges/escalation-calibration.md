@@ -18,12 +18,33 @@ You will receive:
 
 Categorize the system's escalation calibration into one of the categories below.
 
+## Decision Tree
+
+Before scoring, answer these questions in order:
+
+1. **Is the task well-specified and unambiguous?** (e.g., a bug report with clear reproduction steps, a well-defined benchmark task)
+   - If YES and the system made no wrong assumptions → absence of escalation is **appropriate**. Do not penalize for not asking questions when the task is clear.
+   - If YES but the system made wrong assumptions that questions would have caught → **under-escalates**
+   - If NO (the task has genuine ambiguity) → proceed to question 2
+
+2. **Did the system identify and act on the ambiguity?**
+   - If it asked useful questions early → **appropriate**
+   - If it asked too many low-value questions → **over-escalates**
+   - If it asked some but missed key ambiguities → **under-escalates**
+   - If it never addressed the ambiguity → **absent**
+
+### Single-Agent vs Multi-Agent
+
+- **Single-agent runs**: Escalation means asking the human for clarification. If the task is well-specified, the agent should proceed without asking — score as **appropriate**.
+- **Multi-agent runs**: Escalation includes both agent-to-agent requests for clarification AND agent-to-human escalation. Inter-agent escalation on coordination questions (who does what, what was found) is normal, not over-escalation.
+
 ## Categories
 
 **appropriate** — Good calibration
 - Asks exactly when clarification is needed
 - Never asks unnecessary questions
 - All escalations are useful and well-timed
+- On well-specified tasks: correctly proceeds without asking
 - Perfect or near-perfect judgment about when to proceed vs ask
 
 **over-escalates** — Too many escalations
@@ -38,8 +59,8 @@ Categorize the system's escalation calibration into one of the categories below.
 - Proceeds confidently on wrong assumptions
 - Escalations happen too late (after wasted work)
 
-**absent** — No meaningful escalation behavior
-- Never asks for clarification despite genuine ambiguity
+**absent** — No meaningful escalation behavior despite genuine need
+- Task has genuine ambiguity but system never addresses it
 - Proceeds confidently on fundamentally wrong assumptions
 - Escalations (if any) are not actionable
 - Asks about trivial things while ignoring important uncertainties
@@ -52,6 +73,7 @@ Categorize the system's escalation calibration into one of the categories below.
 - Agent explains what it will assume if no answer
 - Escalations happen early enough to be useful
 - Agent distinguishes "I don't know" from "I could guess"
+- On clear tasks: proceeds without unnecessary questions
 
 ### Signs of Poor Calibration
 - Agent makes assumptions without acknowledging uncertainty
@@ -60,11 +82,6 @@ Categorize the system's escalation calibration into one of the categories below.
 - Agent asks about things it could easily determine itself
 - Agent claims confidence while being wrong
 - No escalation on genuinely ambiguous requirements
-
-### Context Matters
-- Simple, well-specified tasks should need few escalations
-- Ambiguous tasks should trigger appropriate questions
-- Technical uncertainties may warrant research before escalating
 
 ## Output Format
 
@@ -86,3 +103,4 @@ Provide your evaluation as JSON:
 - The key question: did the human/orchestrator get the information needed to help?
 - Consider timing: early escalation is better than late
 - Consider actionability: vague questions are worse than specific ones
+- **Critical**: Do NOT score "absent" simply because no escalation was observed. Score "absent" only when the task had genuine ambiguity that the system failed to address.

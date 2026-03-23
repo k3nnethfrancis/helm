@@ -2,87 +2,82 @@
 
 ## System Overview
 
-Helm orchestrates multi-agent experiments, observes their behavior, and evaluates coordination quality. It builds on Sandbox Agent SDK for agent management and adds coordination, observation, and evaluation layers.
+Helm is an experimental layer over benchmarked and arbitrary computer-use tasks. It applies swarm policies to those tasks, runs them through different harnesses, collects the resulting traces, scores both outcome and behavior, and exports the evidence for comparison and iterative improvement.
+
+Near-term, the architecture should be read as a **reward-validation lab**, not yet as a mature RL substrate. Benchmark outcome, behavioral judgments, and trace-derived metrics are all collected today, but the judged dimensions still need to clear repeatability and sensitivity gates before they are promoted into training reward.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         HELM                                     │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │ Experiment Runner                                        │    │
-│  │ - Reads pattern config (YAML)                            │    │
-│  │ - Spawns agent sessions via Sandbox Agent SDK            │    │
-│  │ - Sets up shared filesystem                              │    │
-│  │ - Manages experiment lifecycle                           │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                          │                                       │
-│                          ▼                                       │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │ Runtime Guard                                            │    │
-│  │ - Subscribes to event streams from all sessions          │    │
-│  │ - Applies intervention rules                             │    │
-│  │ - Approves/rejects permissions                           │    │
-│  │ - Detects stuck states, nudges agents                    │    │
-│  │ - (Optional) Escalates/pauses for human intervention     │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                          │                                       │
-│     ┌────────────────────┼────────────────────┐                 │
-│     ▼                    ▼                    ▼                 │
-│  ┌──────────┐      ┌──────────┐         ┌──────────┐           │
-│  │ Agent 1  │      │ Agent 2  │   ...   │ Agent N  │           │
-│  │ Session  │      │ Session  │         │ Session  │           │
-│  │          │◄────►│          │◄───────►│          │           │
-│  │ (via SDK)│      │ (via SDK)│         │ (via SDK)│           │
-│  └──────────┘      └──────────┘         └──────────┘           │
-│        │                 │                    │                 │
-│        └─────────────────┼────────────────────┘                 │
-│                          ▼                                       │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │ Shared Filesystem                                        │    │
-│  │                                                          │    │
-│  │  coordination/                                           │    │
-│  │  ├── messages/        # Inter-agent messages             │    │
-│  │  ├── state.json       # Shared state                     │    │
-│  │  └── signals/         # Coordination signals             │    │
-│  │                                                          │    │
-│  │  workspace/           # Actual work artifacts            │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                          │                                       │
-│                          ▼                                       │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │ Event Collector                                          │    │
-│  │ - Aggregates streams from all sessions                   │    │
-│  │ - Persists to experiments/{id}/                          │    │
-│  │ - Reconstructs multi-agent transcript                    │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                          │                                       │
-│                          ▼                                       │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │ Judge (Separate Context)                                 │    │
-│  │ - Fresh agent session, no shared history                 │    │
-│  │ - Receives only transcript                               │    │
-│  │ - Scores against dimension rubric                        │    │
-│  │ - Returns score + justification + evidence               │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
+│                         HELM                                    │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ Task Layer                                                │  │
+│  │ - benchmark adapter or arbitrary task                     │  │
+│  │ - verifier / task outcome                                 │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                          │                                      │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ Swarm Policy Layer                                        │  │
+│  │ - YAML topology, roles, orchestration rules, limits       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                          │                                      │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ Execution Layer                                           │  │
+│  │ - harness adapters / SDK daemon                           │  │
+│  │ - agent sessions + shared filesystem                      │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                          │                                      │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ Evaluation Layer                                          │  │
+│  │ - event collector                                         │  │
+│  │ - behavioral judges                                       │  │
+│  │ - trace-derived metrics                                   │  │
+│  │ - runtime guard as safety net / experimental variable     │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                          │                                      │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ Alignment / Analysis Layer                                │  │
+│  │ - comparison studies                                      │  │
+│  │ - dataset export                                          │  │
+│  │ - iterative improvement                                   │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Components
 
-### Experiment Runner
+### Experiment Runner (`experiment.py`)
 
-Manages the full lifecycle of an experiment:
+Manages the full lifecycle of a swarm rollout:
 
 1. **Setup**: Create experiment directory, parse config, initialize shared filesystem
-2. **Spawn**: Start agent sessions via Sandbox Agent SDK
-3. **Run**: Monitor until completion or timeout
-4. **Collect**: Aggregate all events into unified transcript
+2. **Spawn**: Start agent sessions via Sandbox Agent SDK, inject system prompts
+3. **Run**: Monitor event streams until completion or timeout
+4. **Collect**: Aggregate events into per-agent traces + unified transcript
 5. **Teardown**: Stop sessions, finalize artifacts
 
-### Runtime Guard (Rule Engine)
+Key: the experiment runner should be thought of as lab infrastructure, not the object of optimization. It packages a task with a swarm policy, runs it on a chosen harness, and preserves the resulting trace.
 
-Monitors agent activity and decides when to intervene. Two modes:
+System prompts are injected via `post_message()`. They include:
+- The agent's role and responsibilities
+- Who the other agents are and what they do
+- How to coordinate (filesystem paths, message conventions)
+- Working directory context
+
+This is one mechanism for prescribing agent behavior. It is guidance, not enforcement, which is why harness comparisons and trace inspection matter.
+
+More generally: Helm should expose capabilities in the runtime, while keeping coordination policy in the explicit experiment condition. See [coordination-design-principles.md](/Users/kenneth/Desktop/lab/projects/helm/docs/coordination-design-principles.md).
+
+### Runtime Guard (`runtime_guard.py`)
+
+Monitors agent activity and decides when to intervene.
+
+Architecturally, this should be treated as a safety net and experimental variable, not as the canonical orchestrator. If the runtime guard meaningfully changes behavior, that change is part of the condition being studied.
 
 **Rule-based**: Apply configured rules to events
 ```yaml
@@ -95,140 +90,164 @@ rules:
     then: nudge_coordinator
 ```
 
-**Agent-based (future)**: A separate agent could monitor streams and make judgment calls. More flexible but harder to analyze.
+Available actions: `approve`, `reject`, `escalate`, `escalate_to_human`, `log`, `nudge`, `nudge_coordinator`.
 
-### Sandbox Agent SDK Integration
+**Future**: Could be replaced/augmented with a trained policy model that makes real-time intervention decisions (this would be a deployment target for RQ3 behavioral monitor).
 
-Each agent session is managed via Sandbox Agent SDK:
+### Agent Harnesses
+
+Two execution backends:
+
+**DirectCLI** (default when all agents have registered adapters):
+Spawns agent CLI subprocesses directly, bypassing the SDK daemon. Each harness has an adapter (`HarnessAdapter` subclass) that constructs the CLI command and parses NDJSON output into `SDKEvent` objects.
 
 ```python
-from helm.sdk import SDKClient, SDKConfig, SessionConfig
+from helm.sdk import DirectCLIClient, SessionConfig
 
-# Start daemon and connect
-sdk = SDKClient(SDKConfig(binary_path=Path("bin/sandbox-agent")))
-await sdk.start()
-
-# Create session (resolved from pattern `agent.harness`)
-session_agent = resolve_session_agent(agent.harness)  # e.g. claude-code -> claude
-session_config = SessionConfig(agent=session_agent, permission_mode="bypass")
-await sdk.create_session(session_id, session_config)
-
-# Send task
-await sdk.post_message(session_id, task_prompt)
-
-# Stream events
-async for event in sdk.stream_events(session_id):
+sdk = DirectCLIClient()
+await sdk.create_session(session_id, SessionConfig(agent="claude"))
+await sdk.post_message(session_id, task_prompt)  # Spawns subprocess
+async for event in sdk.stream_events(session_id):  # Reads NDJSON
     collector.record(session_id, event)
-
-    if event.type == "permission.requested":
-        permission_id = event.data.get("permission_id")
-        await sdk.reply_permission(session_id, permission_id, "once")
 ```
+
+Registered adapters:
+- `ClaudeAdapter`: `claude -p --output-format stream-json --verbose --dangerously-skip-permissions`
+- `CodexAdapter`: `codex exec --json --dangerously-bypass-approvals-and-sandbox`
+
+**SDK Daemon** (fallback for unknown harnesses):
+Routes through the Sandbox Agent SDK daemon using ACP (JSON-RPC over HTTP). Used when an agent's harness doesn't have a registered adapter.
+
+**Harness aliases** (`experiment.py:HARNESS_ALIASES`):
+- `claude-code` → `claude` (Claude Code CLI)
+- `codex` → `codex` (Codex CLI, GPT-5)
+- `opencode` → `opencode` (OpenCode CLI, multi-provider via OpenRouter)
+- `amp` → `amp` (Amp CLI)
+
+#### Harness Control (Open Question)
+
+The YAML config defines topology (hub-spoke, peer, etc.) and roles. But agents are autonomous, and harnesses differ in what they actually enforce. Current control mechanisms:
+
+| Control | Mechanism | Enforcement |
+|---------|-----------|-------------|
+| Role/behavior | System prompt | Soft (model can ignore) |
+| Permission gating | SDK permission events + runtime guard rules | Hard (if SDK enforces) |
+| Turn limits | `max_turns_per_agent` config | Hard (Helm stops session) |
+| Blocked commands | `limits.blocked_commands` config | Hard (permission denied) |
+| Inactivity nudge | Timer-based `post_message()` | Soft |
+
+What we **cannot** currently control:
+- Sub-agent spawning (Claude Code's Agent/TeamCreate tools)
+- Direct model-to-model communication outside filesystem
+- Tool selection within the agent's native capabilities
+
+**Open question**: Is system prompt steering sufficient for generating useful training traces? Or do we need hard constraints (e.g., Claude Code headless mode with `--allowedTools`, Codex flag equivalents)? This is empirical — run experiments, review traces, measure compliance.
 
 ### Shared Filesystem
 
-Agents coordinate via filesystem rather than direct communication:
+Agents coordinate via filesystem. This is a policy choice and an experimental condition, not a universal truth about swarms:
 
 ```
+
+The important boundary is:
+- runtime exposes channels like shared files, persistent state, and live follow-up messages when available
+- YAML/prompt decides how agents are asked to use those channels
+- evaluation measures what they actually chose to do
+
+Helm should not quietly turn a capability into a hidden policy default, because that contaminates the training/evaluation evidence.
 experiments/{id}/
 ├── config.yaml           # Experiment configuration
 ├── coordination/
-│   ├── messages/         # Timestamped message files
-│   │   ├── 001-agent1-to-all.md
-│   │   └── 002-agent2-to-agent1.md
-│   ├── state.json        # Shared state (who's doing what)
-│   └── signals/          # Coordination signals
-│       ├── agent1.ready
-│       └── agent2.blocked
-├── workspace/            # Actual work artifacts
-│   ├── src/
-│   └── tests/
-├── transcripts/          # Captured events per agent
-│   ├── agent1.jsonl
-│   └── agent2.jsonl
+│   ├── messages/         # Timestamped inter-agent messages
+│   ├── state.json        # Shared state
+│   ├── signals/          # Coordination signals (ready, blocked, done)
+│   ├── tasks/            # Hub-spoke task assignments
+│   ├── status/           # Per-agent status files
+│   └── reviews/          # Code review artifacts
+├── workspace/            # Actual work artifacts (code, data)
+├── transcripts/          # Per-agent event traces
 ├── scores.json           # Dimension scores
+├── metadata.json         # Experiment metadata + provenance
+├── run_data.json         # Versioned run data contract
 └── summary.md            # Human-readable summary
 ```
 
-### Event Collector
+### Event Collector (`collector.py`)
 
-Aggregates events from all sessions into a unified transcript:
+Aggregates events from all sessions.
 
-- Merge streams by timestamp
-- Link parent/child events across agents
-- Reconstruct information flow
-- Persist in standard format
-- Compute deterministic orchestration metrics for `run_data.json`
+- Per-agent traces (full tool calls, messages, coordination events)
+- Unified multi-agent transcript (merged by timestamp)
+- Information flow reconstruction
+- Deterministic orchestration metrics
+
+The collector should preserve enough raw detail that new evaluation questions can be asked later without rerunning the experiment.
 
 #### Parallelism Metrics
 
-Helm currently computes parallelism metrics directly from transcript timing:
-
+Computed from transcript timing:
 - `assistant_active_seconds`: summed assistant interval duration across all agents
-- `wall_clock_seconds`: elapsed time from first assistant step to last assistant step
-- `critical_path_ratio`: `wall_clock_seconds / assistant_active_seconds`
-- `parallelism_efficiency.value`: `1 - critical_path_ratio` (higher means more parallel)
+- `wall_clock_seconds`: elapsed time first→last assistant step
+- `critical_path_ratio`: `wall_clock / assistant_active`
+- `parallelism_efficiency`: `1 - critical_path_ratio`
 
-This is persisted in `run_data.json` under `evals.orchestration.parallelism_efficiency`.
+### Judge (`judge.py`)
 
-### Judge
+Evaluates experiments in isolated context:
 
-Evaluates experiments in a separate, isolated context:
-
-1. Spawn fresh agent session (no history from experiment)
+1. Spawn fresh session (no shared history with experiment)
 2. Provide only the transcript + dimension rubric
-3. Score 1-10 with justification and evidence citations
+3. Score with justification and evidence citations
 4. Return structured result
 
-This mirrors Petri's approach: the judge never participated in the experiment.
+Three backend paths:
+- `claude-headless`: Claude Code headless
+- `codex-headless`: Codex headless
+- `openrouter`: OpenRouter API (throughput / audit path, configurable model)
 
-### Benchmark Mode
+`sdk` remains accepted as a compatibility alias for `claude-headless`.
 
-Helm supports two execution modes:
+### Verifier
 
-- `helm run`: arbitrary task provided by user.
-- `helm benchmark run`: sampled benchmark-backed runs from a pattern's
-  `benchmark` block.
+Task correctness verification:
 
-Benchmark mode records per-example provenance (adapter, benchmark ID, split,
-seed, example ID) into metadata and `run_data.json` for training/export use.
+- **Completion mode**: pass/fail based on coordination signals (`signals/done`)
+- **Command mode**: run external verifier script per example
+  - SWE-bench: `scripts/verify_swebench.py` — clones repo, applies patch, runs tests
+  - Placeholders: `{experiment_dir}`, `{example_id}`, `{dataset_path}`, etc.
 
-## Data Flow
+### Training Data Pipeline
 
 ```
-Config (YAML)
-     │
-     ▼
-Experiment Runner ──► Sandbox Agent SDK ──► Agent Sessions
-     │                       │
-     │                       ▼
-     │                 Event Streams (SSE)
-     │                       │
-     ├───────────────────────┤
-     │                       │
-     ▼                       ▼
-Runtime Guard          Event Collector
-     │                       │
-     ▼                       ▼
-Intervention          Unified Transcript
-(approve/reject)            │
-                            ▼
-                         Judge
-                            │
-                            ▼
-                    Scores + Analysis
+Experiment run
+    → Per-agent traces (event collector)
+    → Judge scores (5 behavioral dimensions)
+    → Verifier score (task pass/fail)
+    → Candidate reward terms: benchmark + judged dimensions + trace metrics
+    → Export: helm benchmark export → training JSONL
 ```
+
+**Per-agent trace as one training view**: Each agent in a multi-agent experiment produces its own trace. One experiment with 3 agents can yield 3 role-specific examples.
+
+**But the primary research unit is the swarm rollout**: the full policy + trace + verifier result + behavioral scores. Per-agent traces, orchestrator traces, and derived datasets are all views over that canonical artifact.
+
+**Current state**:
+- export already works for rollout artifacts and deterministic placeholder rewards
+- judged dimensions are collected and saved, but are not yet treated as trusted reward terms
+- the first job is to validate those dimensions before coupling them into RL
+
+**Current limitation**: Export pipeline (`helm benchmark export`) still privileges simplified training rows. Full multi-turn traces with tool use sequences are collected, but the dataset story for swarm-level and orchestrator-level optimization is still evolving.
+
+**Near-term implication**: reward validation precedes RL. The current phase is running enforced topology experiments with validated behavioral dimensions.
 
 ## Coordination Patterns
 
 ### Hub and Spoke
 
-One central agent (orchestrator) delegates to workers:
-
 ```
         ┌─────────┐
         │  Hub    │
-        │(Claude) │
+        │(coord.) │
         └────┬────┘
              │
     ┌────────┼────────┐
@@ -238,12 +257,10 @@ One central agent (orchestrator) delegates to workers:
 └──────┘ └──────┘ └──────┘
 ```
 
-**Pros**: Clear authority, easy to track
-**Cons**: Single point of failure, bottleneck
+**Pros**: Clear authority, easier to trace decisions
+**Cons**: Single point of failure, bottleneck, coordinator context degradation
 
 ### Peer Network
-
-Agents coordinate as equals via shared state:
 
 ```
 ┌──────┐     ┌──────┐
@@ -255,12 +272,10 @@ Agents coordinate as equals via shared state:
       └──────┘
 ```
 
-**Pros**: Resilient, parallel work
-**Cons**: Coordination overhead, potential chaos
+**Pros**: Resilient, parallel work, no bottleneck
+**Cons**: Coordination overhead, potential chaos, harder to attribute decisions
 
 ### Pipeline
-
-Sequential handoff between specialized agents:
 
 ```
 ┌──────┐    ┌──────┐    ┌──────┐
@@ -269,49 +284,27 @@ Sequential handoff between specialized agents:
 ```
 
 **Pros**: Clear stages, quality gates
-**Cons**: Bottlenecks, no parallelism
+**Cons**: Sequential bottlenecks, no parallelism
 
 ## Intervention Points
 
-The Sandbox Agent SDK exposes two intervention mechanisms:
+Sandbox Agent SDK exposes two intervention mechanisms:
 
 ### Permission Approval
 
-When an agent requests permission for an action, the orchestrator matches against rules:
-
 ```python
-# In runtime_guard.py — rule matching and action
 if event.type == "permission.requested":
     permission_id = event.data.get("permission_id")
     action = event.data.get("action", "")
-
-    # Rules can approve, reject, escalate, or log
-    await sdk.reply_permission(session_id, permission_id, "once")   # approve
-    await sdk.reply_permission(session_id, permission_id, "deny")   # reject
-    await sdk.reply_permission(session_id, permission_id, "always") # allow permanently
-```
-
-### Question Handling
-
-When an agent asks a question, the orchestrator can answer or reject:
-
-```python
-if event.type == "question.requested":
-    question_id = event.data.get("question_id")
-
-    # Answer the question
-    await sdk.reply_question(session_id, question_id, "Use JWT")
-
-    # Or reject it (agent must proceed without answer)
-    await sdk.reject_question(session_id, question_id)
+    # Rules can approve, reject, or escalate
+    await sdk.reply_permission(session_id, permission_id, "once")    # approve
+    await sdk.reply_permission(session_id, permission_id, "deny")    # reject
+    await sdk.reply_permission(session_id, permission_id, "always")  # allow permanently
 ```
 
 ### Inactivity Detection
 
-The orchestrator tracks per-agent activity and nudges idle agents:
-
 ```yaml
-# In pattern YAML
 orchestrator:
   rules:
     - on: no_activity
@@ -323,12 +316,26 @@ orchestrator:
 ## Sandboxing
 
 Agents run in isolated environments via:
-
 - **Daytona**: Cloud sandboxes with git tracking
 - **E2B**: Ephemeral compute sandboxes
 - **Local**: OS-level sandboxing (Seatbelt/bubblewrap)
 
-Sandboxing ensures:
-- Agents can't affect real filesystem
-- Network access is controlled
-- Experiments are reproducible
+## Benchmark Mode
+
+Two execution modes:
+- `helm run`: arbitrary task, user-provided
+- `helm benchmark run`: sampled from a pattern's `benchmark` block
+
+Benchmark mode records per-example provenance (adapter, benchmark ID, split, seed, example ID) into metadata and `run_data.json`.
+
+## Three Pipelines (Don't Conflate)
+
+Helm touches models in three distinct ways:
+
+| Pipeline | What runs | What it produces | Current state |
+|----------|-----------|-----------------|---------------|
+| **Agent execution** | Coding agent CLIs via DirectCLI/SDK | Per-agent traces | Claude working (single + multi-agent). Codex adapter written, untested. |
+| **Judging** | LLM scoring transcripts | Dimension scores | Working (OpenRouter + SDK backends) |
+| **RL training** | Prime trains on traces | Improved model weights | Single-turn envs working, multi-turn gap |
+
+These are independent systems. "We used Qwen" (RL training target) and "we used OpenRouter" (judge backend) don't mean "we ran Qwen/OpenRouter as agents."

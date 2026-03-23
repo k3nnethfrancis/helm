@@ -8,15 +8,19 @@ from helm.sdk import SDKEvent
 
 
 class DummySDK:
-    def __init__(self) -> None:
+    def __init__(self, *, supports_follow_up: bool = True) -> None:
         self.messages: list[tuple[str, str]] = []
         self.permissions: list[tuple[str, str, str]] = []
+        self.supports_follow_up = supports_follow_up
 
     async def post_message(self, session_id: str, message: str) -> None:
         self.messages.append((session_id, message))
 
     async def reply_permission(self, session_id: str, permission_id: str, reply: str) -> None:
         self.permissions.append((session_id, permission_id, reply))
+
+    def supports_follow_up_messages(self, session_id: str) -> bool:
+        return self.supports_follow_up
 
 
 def _event(event_type: str, **data: str) -> SDKEvent:
@@ -93,6 +97,29 @@ def test_nudge_coordinator_targets_hub_session() -> None:
     asyncio.run(orchestrator._apply_rule(rule, _event("no_activity"), worker_state))
 
     assert sdk.messages == [("s-hub", "check status")]
+
+
+def test_nudge_is_logged_but_not_sent_when_follow_up_messages_unsupported() -> None:
+    rule = OrchestratorRule(
+        on="no_activity",
+        then=OrchestratorAction.NUDGE,
+        message="keep going",
+    )
+    sdk = DummySDK(supports_follow_up=False)
+    orchestrator = RuntimeGuard(OrchestratorConfig(rules=[rule]), sdk)
+    orchestrator.register_agent("worker-a", "s-worker", role="worker")
+
+    worker_state = orchestrator.get_agent_by_session("s-worker")
+    assert worker_state is not None
+
+    asyncio.run(orchestrator._apply_rule(rule, _event("no_activity"), worker_state))
+
+    assert sdk.messages == []
+    payload = orchestrator.get_interventions_payload()
+    assert payload[0]["details"]["nudge_delivered"] is False
+    assert payload[0]["details"]["nudge_skipped_reason"] == (
+        "follow_up_messages_unsupported"
+    )
 
 
 def test_interventions_payload_is_json_serializable_shape() -> None:
