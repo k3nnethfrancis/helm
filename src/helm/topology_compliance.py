@@ -236,15 +236,15 @@ def analyze_experiment(experiment_dir: Path) -> TopologyCompliance:
             if name == "Bash":
                 cmd_str = str(inp.get("command", ""))
                 if "helm.agent_cli" in cmd_str or "helm-agent" in cmd_str:
-                    if " send " in cmd_str:
+                    if " send" in cmd_str:
                         ac.helm_agent_sends += 1
                         result.helm_agent_sends_total += 1
-                    elif " spawn " in cmd_str:
+                    elif " spawn" in cmd_str:
                         ac.helm_agent_spawns += 1
                         result.helm_agent_spawns_total += 1
-                    elif " inbox " in cmd_str:
+                    elif " inbox" in cmd_str:
                         ac.helm_agent_inbox += 1
-                    elif " status " in cmd_str:
+                    elif " status" in cmd_str:
                         ac.helm_agent_status += 1
 
         ac.tool_counts = dict(tool_counts)

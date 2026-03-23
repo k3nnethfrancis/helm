@@ -6,8 +6,9 @@ TOPOLOGY_RULES: dict[tuple[str, str], list[str]] = {
     # Single: true single agent, no delegation or messaging
     ("single", "solver"): ["Agent", "TeamCreate", "SendMessage"],
     # Independent: isolated candidates, no cross-communication
-    ("independent", "candidate"): ["Agent", "TeamCreate", "SendMessage"],
-    ("independent", "selector"): ["Agent", "TeamCreate", "SendMessage"],
+    # RoleSpec uses runtime_role "worker" and "hub" for independent family
+    ("independent", "worker"): ["Agent", "TeamCreate", "SendMessage"],
+    ("independent", "hub"): ["Agent", "TeamCreate", "SendMessage"],
     # Centralized: all coordination through filesystem, no native tools
     ("centralized", "hub"): ["Agent", "TeamCreate", "SendMessage"],
     ("centralized", "worker"): ["Agent", "TeamCreate", "SendMessage"],
