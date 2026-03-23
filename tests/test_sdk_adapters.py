@@ -93,7 +93,7 @@ def test_direct_cli_kills_process_group(monkeypatch) -> None:
     class _DummySession:
         process = _DummyProcess()
 
-    monkeypatch.setattr("helm.sdk.os.killpg", lambda pid, sig: events.append((pid, sig)))
+    monkeypatch.setattr("helm.adapters.direct_cli.os.killpg", lambda pid, sig: events.append((pid, sig)))
 
     asyncio.run(DirectCLIClient._kill_process(_DummySession()))  # type: ignore[arg-type]
 

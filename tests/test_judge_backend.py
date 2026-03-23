@@ -186,7 +186,7 @@ def test_codex_headless_judge_uses_output_last_message(monkeypatch, tmp_path: Pa
         return _DummyProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
-    monkeypatch.setattr("helm.judge.tempfile.TemporaryDirectory", _FakeTemporaryDirectory)
+    monkeypatch.setattr("helm.judge.backends.tempfile.TemporaryDirectory", _FakeTemporaryDirectory)
 
     judge = CodexHeadlessJudge(model="gpt-5.4")
     score = asyncio.run(
