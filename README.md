@@ -36,19 +36,23 @@ The canonical artifact in Helm is not a model answer. It is a **swarm rollout**:
 
 ## Near-Term Program
 
-The current phase is **topology enforcement + clean experiment corpus**.
+The current phase is **building real-time inter-agent messaging** to enable clean multi-agent experiment data.
 
 ### What's done
-- **Judge validation (J4):** 5/6 behavioral dimensions validated via cross-judge counterparty comparison (Codex ↔ Claude Sonnet). Failure-suppression excluded (0% agreement).
-- **Topology enforcement:** Mechanical enforcement via `--disallowedTools` blocks native Agent/TeamCreate/SendMessage. Controlled coordination through `helm-agent` CLI. Verified: 1.00 compliance on enforced runs vs 0.55-0.82 without enforcement.
-- **Topology compliance analyzer:** Deterministic extraction of subagent spawns, native messaging, lateral communication, and filesystem protocol usage from transcripts.
-- **6 topology families:** single, independent, centralized, decentralized, hybrid, delegating (new — hub can spawn subagents via helm-agent CLI).
+- **Experiment 001 single-agent baseline:** 8/8 tasks complete, 50% solve rate, clean behavioral profiles
+- **Experiment 001 centralized@5:** Two rounds run — found systematic coordinator collapse, then polling waste after prompt tightening
+- **Judge validation (J4):** 5/6 behavioral dimensions validated via cross-judge counterparty comparison
+- **Judge visibility fix:** Found and fixed `tool_use` vs `tool_call` type mismatch — all tool calls were invisible to judge
+- **Topology enforcement:** Mechanical enforcement via `--disallowedTools`. 1.00 structural compliance on all enforced runs.
+- **Config-driven coordination:** `CoordinationMechanism` enum (`filesystem` | `messaging`) drives prompt injection and backend setup
+- **Transcript viewer:** `helm view <experiment-id>` renders per-agent HTML panels with coordination log, markdown rendering, metadata
+- **Topology compliance analyzer:** Deterministic extraction of tool usage and coordination patterns from transcripts
 
 ### What's next
-1. Clean the repo for open-source sharing
-2. Re-run the broader panel (8 tasks × 3+ families) with mechanical enforcement
-3. Run Codex mirror (same tasks, different harness) for head-to-head comparison
-4. Blog post reporting which agents and topologies produce better multi-agent coordination on SWE-bench
+1. Build Helm-native push messaging (broker + channel delivery) so agents can receive messages in real-time
+2. Re-run centralized@5 with push messaging to validate coordination works
+3. Run remaining topologies (hybrid@5, delegating@1)
+4. Blog post: single-agent vs multi-agent coordination on SWE-bench
 
 ## What Helm Does
 

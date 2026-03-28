@@ -23,41 +23,46 @@ This breaks down into:
 
 ## Current Priority
 
-The current priority is **topology enforcement and repo cleanup before the next experiment run**.
+The current priority is **building real-time inter-agent messaging** so multi-agent experiments produce clean coordination data for the blog post.
 
-### Where We Are (2026-03-22)
+### Where We Are (2026-03-28)
 
-**Repo is clean, refactored, and enforcement-ready.**
+**Experiment 001 is running. Single-agent baseline is complete. Multi-agent runs reveal coordination infrastructure gaps.**
 
-Completed this session:
-- Source refactored: 3 monolithic files → 3 subpackages (`adapters/`, `judge/`, `topologies/`)
-- Topology enforcement built and verified: `--disallowedTools` + `helm-agent` CLI → 1.00 compliance on test run
-- Topology-adherence judge dimension added (8th dimension)
-- Repo restructured: `configs/` (4 topology YAMLs), `experiments/` (tracked, numbered), `runs/` (gitignored)
-- Stale code deleted: 22 patterns, 6 scripts, 2 docs, tracked experiment data
-- Experiment 001 scaffolded
+Key findings from the 2026-03-27 session:
 
-**Judge dimensions (J4 post-hardening, 2026-03-21):**
-- `escalation-calibration` — 100% counterparty agreement
-- `goal-drift` — 100% counterparty agreement
-- `human-model-accuracy` — 67% counterparty agreement
-- `context-degradation` — 67% (soft signal)
-- `resource-waste` — 33% (soft signal)
-- `topology-adherence` — new, needs J4 validation
-- `failure-suppression` — excluded (0% agreement)
+**Judge visibility bug found and fixed:**
+- Transcript renderer checked `type: "tool_call"` but Claude Code events use `type: "tool_use"` — all tool calls were invisible to the judge
+- All prior judge scores were based on agent narration alone, not actual tool execution
+- Fixed: full tool parameters rendered, per-tool-name breakdown in agent summaries
+
+**Config-driven coordination mechanism:**
+- `CoordinationMechanism` enum: `filesystem` | `messaging`
+- Framework auto-injects mechanism-specific coordination instructions into agent prompts
+- Agent system prompts now focus on role/task constraints; plumbing comes from the framework
+- YAML `coordination.mechanism` field drives behavior — Helm is config-driven, not opinionated
+
+**Experiment 001 results so far:**
+- Single-agent baseline: 8/8 complete, 4/8 solved (50%), clean behavioral profiles
+- Centralized@5 v1 (old prompts): 8/8 run — coordinator systematically collapsed topology (edited code, wrote fake worker status, closed prematurely)
+- Centralized@5 v2 (tightened prompts, messaging-only): 8/8 run — coordinator follows rules but agents burn ~50% of turns polling empty inboxes. Coordination overhead kills performance.
+
+**The fundamental problem:** DirectCLI mode (`claude -p`) doesn't support pushing messages into running sessions. Agents must poll `helm-agent inbox` to check for messages. No push delivery = turn waste = coordination overhead exceeds parallelism benefit.
+
+**Design principle established:** Helm is a research instrument, not an opinionated framework. The YAML config declares experimental conditions (topology, communication channel, enforcement level, delivery mechanism). Helm executes faithfully. The researcher decides what to enforce mechanically vs leave to prompting.
 
 ### Immediate Next Steps
 
-1. **Run experiment 001** (topology enforcement baseline): 4 topologies × 8 SWE-bench tasks with mechanical enforcement
-2. **Validate topology-adherence dimension** via cross-judge counterparty comparison
-3. **Run Codex mirror** when budget available — head-to-head Claude vs Codex comparison
-4. **Blog post** reporting which agents and topologies produce better multi-agent coordination
+1. **Build Helm native messaging with push delivery** — broker + channel push so agents receive messages in real-time without polling. This is the blocking infrastructure gap.
+2. **Re-run centralized@5** with push messaging and validate coordination actually works
+3. **Run remaining topologies** (hybrid@5, delegating@1) once messaging is stable
+4. **Blog post** — the narrative is clear: single-agent vs multi-agent, coordination overhead, what infrastructure is needed to make multi-agent worth it
 
 ### Medium-Term
 
-5. **RL pilot** — closure-first reward on centralized@5, gated on clean experiment data
-6. **Terminal-Bench integration** — second benchmark substrate (ICLR 2026, 89 CLI tasks)
-7. **Prompt template extraction** — move 600+ lines of f-strings from prompts.py to .md template files
+5. **Filesystem vs messaging comparison** — same topology, different coordination channels, measure the difference
+6. **RL pilot** — gated on clean experiment corpus with working coordination
+7. **Terminal-Bench integration** — second benchmark substrate
 
 ### Long-Term Vision
 
@@ -174,11 +179,12 @@ helm/
 │   ├── judge/               # Behavioral judge (backends, scoring, hierarchical strategy)
 │   ├── topologies/          # Topology families, enforcement rules, prompt templates
 │   ├── benchmarks/          # Benchmark adapters (SWE-bench), verification, export
-│   ├── coordination/        # Inter-agent coordination backends (filesystem)
-│   ├── cli.py               # Main Typer CLI
+│   ├── coordination/        # Inter-agent coordination backends (filesystem, messaging)
+│   ├── cli.py               # Main Typer CLI (run, judge, view, analyze, ...)
 │   ├── agent_cli.py         # helm-agent coordination CLI (send/inbox/status/spawn)
-│   ├── config.py            # Pydantic experiment config models
-│   ├── experiment.py        # Experiment lifecycle
+│   ├── config.py            # Pydantic experiment config models (incl. CoordinationMechanism enum)
+│   ├── experiment.py        # Experiment lifecycle + config-driven prompt injection
+│   ├── viewer.py            # HTML transcript viewer (per-agent panels, coordination log)
 │   ├── topology_compliance.py  # Deterministic compliance analysis
 │   ├── matrix.py            # Matrix manifest generation + analysis
 │   ├── collector.py         # Event aggregation + transcript rendering
@@ -245,28 +251,33 @@ python scripts/analyze_experiment_matrix.py experiments/benchmark-runs/<summary1
 
 ## Design Principles
 
-1. **Real tasks, not synthetic scenarios** — Test with actual coding/research work
-2. **Harness agnostic** — Work with any agent via Sandbox Agent SDK
-3. **Evaluation precedes optimization** — Treat new metrics and labels as hypotheses before using them as rewards
-4. **Swarm rollout is the main unit** — The whole coordinated run matters more than any single agent transcript
-5. **Harness effects are scientific variables** — Claude Code, Codex, OpenCode, and others are part of the experiment, not just plumbing
-6. **Task-agnostic design, verifier-dependent execution** — Support any task type, start where verification is easiest (SWE-bench)
-7. **Separate concerns** — Experiment runner, intervention layer, and judge are isolated contexts
+1. **Config-driven, not opinionated** — The YAML config is the experiment definition. Helm executes faithfully. The researcher decides what to enforce vs leave to prompting.
+2. **Real tasks, not synthetic scenarios** — Test with actual coding/research work
+3. **Harness agnostic** — Work with any agent via Sandbox Agent SDK
+4. **Evaluation precedes optimization** — Treat new metrics and labels as hypotheses before using them as rewards
+5. **Swarm rollout is the main unit** — The whole coordinated run matters more than any single agent transcript
+6. **Harness effects are scientific variables** — Claude Code, Codex, OpenCode, and others are part of the experiment, not just plumbing
+7. **Task-agnostic design, verifier-dependent execution** — Support any task type, start where verification is easiest (SWE-bench)
+8. **Separate concerns** — Experiment runner, intervention layer, and judge are isolated contexts
 
 ## Open Questions
 
-### Harness Control
-How much can we control agent behavior through the harness? The YAML defines topology (hub-spoke, peer, etc.) and roles, but agents can deviate. Key questions:
-- Can we disable sub-agent spawning in Claude Code? (headless mode flags)
-- Does Codex or OpenCode have equivalent controls?
-- Is system prompt steering sufficient, or do we need hard constraints?
-- Empirical approach: run experiments, review traces, measure compliance with prescribed patterns.
+### Inter-Agent Messaging (Active, 2026-03-28)
+DirectCLI mode (`claude -p`) doesn't support push delivery — agents must poll for messages, wasting turns. The `notifications/claude/channel` MCP mechanism (proven by claude-peers) can push messages into running sessions. Need to build Helm-native messaging broker with push delivery. Key design questions:
+- Does channel push work in `claude -p` mode or only interactive?
+- Should the broker be an MCP server per agent, or a separate transport layer?
+- How to make this config-driven: `delivery: push | poll`, `enforcement: mechanical | prompt-only`
+
+### Coordination Channel as Experimental Variable (Active, 2026-03-28)
+Filesystem vs messaging vs both — these are experimental conditions, not design decisions. The config should declare the coordination channel and Helm sets it up. Early evidence: dual-channel (filesystem + messaging) creates ambiguity that agents exploit. Single-channel is cleaner.
+
+### Harness Control (Partially Resolved)
+Topology enforcement works mechanically via `--disallowedTools` (1.00 compliance). But **behavioral compliance** is a separate layer — coordinators follow tool restrictions while still collapsing structure (doing work themselves, writing fake status, closing prematurely). Prompt constraints help but aren't sufficient. The gap between structural compliance and behavioral compliance is itself a finding.
 
 ### Coordination Ontology
-We do not yet have a complete definition of "better orchestration." Key questions:
-- Which behavioral dimensions survive contact with real traces?
-- Which metrics correlate with genuine improvement versus cosmetic compliance?
-- When does a strong single agent beat a swarm with fewer failure modes?
+- Which behavioral dimensions survive contact with real traces? (5/6 validated via J4)
+- When does a strong single agent beat a swarm? (Current evidence: always, on bounded-turn tasks with polling-based coordination)
+- What infrastructure would make multi-agent worth the overhead? (Push messaging, plan-then-dispatch, shared memory)
 
 ### Multi-Turn Optimization
 Helm no longer keeps active Prime environment packages or RL configs in-repo. When the project returns to Prime RL, that substrate should be regenerated from the validated benchmark/export corpus rather than treated as current source of truth.
