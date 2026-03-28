@@ -1317,6 +1317,69 @@ def analyze_experiment(
             typer.echo(f"  Run data: {run_data_path}")
 
 
+@app.command("view")
+def view_experiment(
+    experiment_id: Annotated[
+        str,
+        typer.Argument(help="Experiment ID to view"),
+    ],
+    experiments_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--experiments-dir",
+            help="Directory containing experiment data",
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("-o", "--output", help="Output HTML file path"),
+    ] = None,
+    open_browser: Annotated[
+        bool,
+        typer.Option("--open/--no-open", help="Open in browser after rendering"),
+    ] = True,
+) -> None:
+    """Render an experiment transcript as a browsable HTML viewer."""
+    import webbrowser
+
+    from helm.viewer import render_experiment as _render_experiment
+
+    _, default_experiments = get_default_paths()
+    base_dirs = [experiments_dir] if experiments_dir else []
+    base_dirs.append(default_experiments)
+
+    experiment_path = None
+    for base in base_dirs:
+        if base is None:
+            continue
+        candidate = base / experiment_id
+        if candidate.exists():
+            experiment_path = candidate
+            break
+        # Also search subdirectories (e.g., experiments/001_.../runs/)
+        for sub in base.rglob(experiment_id):
+            if sub.is_dir():
+                experiment_path = sub
+                break
+        if experiment_path:
+            break
+
+    if not experiment_path:
+        typer.echo(f"Error: Experiment not found: {experiment_id}", err=True)
+        raise typer.Exit(1)
+
+    html_path = output or (experiment_path / "viewer.html")
+    try:
+        html_content = _render_experiment(experiment_path)
+        html_path.write_text(html_content)
+        typer.echo(f"Viewer written to: {html_path}")
+        if open_browser:
+            webbrowser.open(f"file://{html_path.resolve()}")
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
 def main() -> None:
     """Entry point for the CLI."""
     app()

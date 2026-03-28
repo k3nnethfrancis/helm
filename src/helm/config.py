@@ -135,10 +135,26 @@ class CoordinationChannelConfig(BaseModel):
     availability: CoordinationChannelAvailability = CoordinationChannelAvailability.ALWAYS
 
 
+class CoordinationMechanism(str, Enum):
+    """Primary coordination channel agents should use."""
+
+    FILESYSTEM = "filesystem"
+    MESSAGING = "messaging"
+
+    @classmethod
+    def _missing_(cls, value: object) -> CoordinationMechanism | None:
+        """Accept legacy string values."""
+        if isinstance(value, str):
+            for member in cls:
+                if member.value == value.lower():
+                    return member
+        return None
+
+
 class CoordinationConfig(BaseModel):
     """Configuration for inter-agent coordination."""
 
-    mechanism: str = "filesystem"
+    mechanism: CoordinationMechanism = CoordinationMechanism.FILESYSTEM
     paths: CoordinationPaths = Field(default_factory=CoordinationPaths)
     channels: list[CoordinationChannelConfig] = Field(default_factory=list)
     backend_settings: dict[str, Any] = Field(default_factory=dict)

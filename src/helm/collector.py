@@ -16,8 +16,13 @@ from helm.coordination.base import CoordinationMessage
 from helm.sdk import SDKEvent
 
 TRANSCRIPT_TEXT_PREVIEW_CHARS = 2000
-TRANSCRIPT_TOOL_RESULT_PREVIEW_CHARS = 1000
+TRANSCRIPT_TOOL_RESULT_PREVIEW_CHARS = 2000
 TRANSCRIPT_COORDINATION_PREVIEW_CHARS = 1500
+# Keys rendered inline on the tool call line for quick scanning.
+# All other input keys are rendered as indented key: value pairs.
+TOOL_PRIMARY_KEYS = ("command", "file_path", "path", "pattern", "query")
+# Maximum length for a single tool input value before truncation.
+TOOL_INPUT_VALUE_MAX_CHARS = 400
 
 
 @dataclass
@@ -369,9 +374,13 @@ def _sorted_transcript_items(transcript: dict[str, Any]) -> list[dict[str, Any]]
     return items
 
 
-def _count_agent_tools(items: list[dict[str, Any]]) -> tuple[int, int]:
+def _count_agent_tools(
+    items: list[dict[str, Any]],
+) -> tuple[int, int, dict[str, int]]:
+    """Count tool calls, errors, and per-tool-name breakdown."""
     tool_calls = 0
     tool_errors = 0
+    tool_names: dict[str, int] = {}
 
     for item in items:
         if not isinstance(item, dict):
@@ -390,12 +399,16 @@ def _count_agent_tools(items: list[dict[str, Any]]) -> tuple[int, int]:
         for part in content:
             if not isinstance(part, dict):
                 continue
-            if part.get("type") == "tool_call":
+            if part.get("type") in ("tool_call", "tool_use"):
                 tool_calls += 1
-            elif part.get("type") == "tool_result" and part.get("is_error"):
+                name = part.get("name", "unknown")
+                tool_names[name] = tool_names.get(name, 0) + 1
+            elif part.get("type") == "tool_result" and part.get(
+                "is_error"
+            ):
                 tool_errors += 1
 
-    return tool_calls, tool_errors
+    return tool_calls, tool_errors, tool_names
 
 
 def build_communication_view(transcript: dict[str, Any]) -> dict[str, Any]:
@@ -604,12 +617,12 @@ def render_transcript_markdown(transcript: dict[str, Any]) -> str:
     for item in _sorted_transcript_items(transcript):
         event_type = item.get("event_type")
 
-        # Skip streaming deltas — item.completed has the full content
-        if event_type == "item.delta":
-            continue
-
-        # Skip item.started — it carries no content
-        if event_type == "item.started":
+        # Skip noise events that carry no behavioral content
+        if event_type in (
+            "item.delta",       # streaming deltas — item.completed has full content
+            "item.started",     # no content
+            "rate_limit_event", # telemetry check, not an actual block
+        ):
             continue
 
         timestamp = str(item.get("timestamp", ""))
@@ -638,9 +651,11 @@ def render_transcript_markdown(transcript: dict[str, Any]) -> str:
                     if len(full_text) > TRANSCRIPT_TEXT_PREVIEW_CHARS:
                         text += "..."
                     lines.append(f"\n```\n{text}\n```")
-                elif part.get("type") == "tool_call":
+                elif part.get("type") in ("tool_call", "tool_use"):
                     tool_name = part.get("name", "unknown")
-                    raw_args = part.get("arguments", part.get("input", {}))
+                    raw_args = part.get(
+                        "arguments", part.get("input", {})
+                    )
                     if isinstance(raw_args, str):
                         try:
                             tool_args = json.loads(raw_args)
@@ -650,11 +665,21 @@ def render_transcript_markdown(transcript: dict[str, Any]) -> str:
                         tool_args = raw_args or {}
                     lines.append(f"**Tool**: `{tool_name}`")
                     if isinstance(tool_args, dict):
-                        for key in ("command", "file_path", "path", "pattern", "query"):
-                            if key in tool_args:
-                                val = str(tool_args[key])[:300]
-                                lines.append(f"  {key}: `{val}`")
-                                break
+                        # Show description first if present (agent's
+                        # reasoning about why it called this tool).
+                        desc = tool_args.get("description")
+                        if desc:
+                            lines.append(
+                                f"  description: {str(desc)[:TOOL_INPUT_VALUE_MAX_CHARS]}"
+                            )
+                        # Render all input parameters.
+                        for key, val in tool_args.items():
+                            if key == "description":
+                                continue  # already shown
+                            val_str = str(val)[:TOOL_INPUT_VALUE_MAX_CHARS]
+                            if len(str(val)) > TOOL_INPUT_VALUE_MAX_CHARS:
+                                val_str += "..."
+                            lines.append(f"  {key}: `{val_str}`")
                 elif part.get("type") == "tool_result":
                     output = part.get("output", part.get("text", ""))
                     is_error = part.get("is_error", False)
@@ -800,7 +825,7 @@ def extract_agent_transcript(
     items = agent_data.get("items", [])
     if not isinstance(items, list):
         items = []
-    tool_calls, tool_errors = _count_agent_tools(items)
+    tool_calls, tool_errors, tool_names = _count_agent_tools(items)
     direct_messages = sum(1 for msg in coordination_messages if msg.get("recipient") == agent_id)
     sent_messages = sum(1 for msg in coordination_messages if msg.get("sender") == agent_id)
     broadcast_messages = sum(1 for msg in coordination_messages if msg.get("recipient") == "__all__")
@@ -816,6 +841,7 @@ def extract_agent_transcript(
             "item_count": agent_data.get("item_count", len(items)),
             "tool_calls": tool_calls,
             "tool_errors": tool_errors,
+            "tool_breakdown": tool_names,
             "sent_coordination_messages": sent_messages,
             "received_coordination_messages": direct_messages,
             "broadcast_coordination_messages": broadcast_messages,
@@ -844,6 +870,19 @@ def render_agent_view_markdown(agent_view: dict[str, Any]) -> str:
                 f"- Items: `{summary.get('item_count', 0)}`",
                 f"- Tool calls: `{summary.get('tool_calls', 0)}`",
                 f"- Tool errors: `{summary.get('tool_errors', 0)}`",
+            ]
+        )
+        tool_breakdown = summary.get("tool_breakdown", {})
+        if tool_breakdown:
+            breakdown_str = ", ".join(
+                f"{name}={count}"
+                for name, count in sorted(
+                    tool_breakdown.items(), key=lambda x: -x[1]
+                )
+            )
+            lines.append(f"- Tool breakdown: `{breakdown_str}`")
+        lines.extend(
+            [
                 f"- Coordination sent: `{summary.get('sent_coordination_messages', 0)}`",
                 f"- Coordination received: `{summary.get('received_coordination_messages', 0)}`",
                 f"- Broadcast coordination seen: `{summary.get('broadcast_coordination_messages', 0)}`",

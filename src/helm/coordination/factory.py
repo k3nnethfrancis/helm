@@ -15,6 +15,7 @@ from helm.coordination.filesystem_nudge import FilesystemNudgeBackend
 _REGISTRY: dict[str, type] = {
     "filesystem": FilesystemNudgeBackend,
     "filesystem_nudge": FilesystemNudgeBackend,
+    "messaging": FilesystemNudgeBackend,  # messaging also uses filesystem under the hood
 }
 
 

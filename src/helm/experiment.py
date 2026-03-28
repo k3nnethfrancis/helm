@@ -178,8 +178,13 @@ class Experiment:
         # Initialize coordination backend (owns coordination/ directories)
         agent_ids = [a.id for a in self.config.agents]
         coord_config = self.config.coordination
+        mechanism_str = (
+            coord_config.mechanism.value
+            if hasattr(coord_config.mechanism, "value")
+            else str(coord_config.mechanism)
+        )
         self._backend = create_backend(
-            coord_config.mechanism, **coord_config.backend_settings
+            mechanism_str, **coord_config.backend_settings
         )
         coord_backend_config = coord_config.model_dump()
         coord_backend_config["agent_roles"] = {
@@ -520,11 +525,14 @@ Workspace directory: {self.experiment_dir / 'workspace'}
         Auto-injected by the framework so agents always know:
         - How many agents are in the swarm
         - Who their peers are and what roles they play
-        - What coordination mechanism is in use
+        - What coordination mechanism is in use and how to use it
         - Which topology they're operating in
         """
+        from helm.config import CoordinationMechanism
+
         topology = self.config.topology_label()
         total = len(self.config.agents)
+        mechanism = self.config.coordination.mechanism
 
         peers: list[str] = []
         for a in self.config.agents:
@@ -539,21 +547,61 @@ Workspace directory: {self.experiment_dir / 'workspace'}
             return f"""## Execution Context
 You are operating as a single agent.
 Topology: {topology}
-Coordination mechanism: {self.config.coordination.mechanism}
+Coordination mechanism: {mechanism.value}
 
 Peer agents:
 {peer_list}
 
 """
 
+        # Build mechanism-specific instructions
+        coord_instructions = self._build_coordination_instructions(
+            agent, mechanism
+        )
+
         return f"""## Swarm Context
 You are part of a multi-agent system with {total} agent(s).
 Topology: {topology}
-Coordination mechanism: {self.config.coordination.mechanism}
+Coordination mechanism: {mechanism.value}
 
 Your peers:
 {peer_list}
 
+{coord_instructions}
+"""
+
+    def _build_coordination_instructions(
+        self,
+        agent: AgentConfig,
+        mechanism: Any,
+    ) -> str:
+        """Generate coordination instructions based on the configured mechanism."""
+        from helm.config import CoordinationMechanism
+
+        agent_id = agent.id
+
+        if mechanism == CoordinationMechanism.MESSAGING:
+            return f"""## Coordination Protocol (messaging)
+
+Coordinate exclusively through the messaging CLI. Do NOT write to `coordination/tasks/` or `coordination/status/`.
+
+- Send a message: `python -m helm.agent_cli send --from {agent_id} --to <recipient> --msg "..."`
+- Check your inbox: `python -m helm.agent_cli inbox --agent {agent_id}`
+
+The only files you should write to `coordination/` are global signals:
+- `coordination/signals/verification-summary.md` (coordinator only, after reviewer confirms PASS)
+- `coordination/signals/done` (coordinator only, to end the experiment)
+"""
+
+        # Default: filesystem
+        return f"""## Coordination Protocol (filesystem)
+
+Coordinate through shared files in the `coordination/` directory.
+
+- Write task assignments to `coordination/tasks/<agent_id>.md`
+- Write completion reports to `coordination/status/<your_agent_id>_done.md`
+- Read other agents' status from `coordination/status/`
+- Write `coordination/signals/done` when the experiment is complete (coordinator only)
 """
 
     async def _stream_agent_events(self, agent_id: str, session_id: str) -> None:
