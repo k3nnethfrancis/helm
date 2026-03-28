@@ -1,7 +1,7 @@
 # Coordination Design Principles
 
-**Status**: Working design note  
-**Last updated**: 2026-03-07
+**Status**: Active design note
+**Last updated**: 2026-03-28
 
 ## Core Principle
 
@@ -169,29 +169,54 @@ If Helm keeps policy in the explicit experiment condition:
 
 That is closer to reality and better for generalization.
 
-## Current Position
+## Current Position (2026-03-28)
 
-Helm should currently be treated as:
-- a runtime that exposes coordination channels
-- a logger that preserves evidence about their use
-- an evaluator that studies the consequences
+Helm is config-driven. The YAML config declares experimental conditions (topology, communication channel, enforcement level, delivery mechanism). Helm executes faithfully. The researcher decides what to enforce mechanically vs leave to prompting.
 
-Not:
-- a hidden coordination-policy engine
+### What's implemented
 
-## Planned Code Changes (Do Not Execute Yet)
+**Coordination mechanisms (config-driven):**
+- `mechanism: filesystem` — agents coordinate through shared files in `coordination/`. Backend polls for new files and delivers nudges (when harness supports follow-up messages).
+- `mechanism: messaging` — agents get MCP tools (`helm_send_message`, `helm_check_inbox`, `helm_list_peers`, `helm_signal_done`) via a Helm broker. Messages route through an HTTP broker running in a background thread.
 
-1. Make the capability/policy boundary explicit in docs and comments.
-2. Ensure coordination backends do not inject strategy text by default.
-3. Add schema support to record coordination channel type and usage more explicitly.
-4. Review YAML patterns so coordination guidance lives there, not in backend code.
-5. Add evaluation fields that distinguish:
-   - persistent artifact creation
-   - ephemeral message attempts
-   - ephemeral delivery success
-   - evidence of downstream uptake
-6. Only after that, consider adding richer live-message channels as optional capabilities.
+**Config fields:**
+```yaml
+coordination:
+  mechanism: messaging   # filesystem | messaging
+  delivery: poll         # poll | push (push not yet available)
+  enforcement: prompt-only  # prompt-only | mechanical
+```
+
+**Topology enforcement:**
+- `--disallowedTools` mechanically blocks native Agent/TeamCreate/SendMessage (structural compliance)
+- Broker optionally rejects messages that violate `can_message` rules when `enforcement: mechanical`
+- Prompt-level constraints (coordinator shouldn't edit code, must wait for reviewer) are NOT mechanically enforced
+
+**Prompt injection:**
+- The framework auto-injects coordination instructions based on `mechanism` (which tools to use, how to check messages)
+- Agent system prompts focus on role and task constraints, not coordination plumbing
+
+### Empirical findings
+
+From Experiment 001 (2026-03-27/28):
+- **Dual-channel coordination creates ambiguity agents exploit.** When both filesystem and messaging are available, coordinators wrote fake status files, edited code directly, and closed prematurely.
+- **Single-channel is cleaner.** Messaging-only forced proper delegation.
+- **Structural compliance ≠ behavioral compliance.** Coordinators follow tool restrictions (1.00 compliance) while still collapsing the topology by doing all work themselves.
+- **Polling-based messaging wastes turns.** Without push delivery, agents burn 30-50% of turns checking empty inboxes.
+
+### What's not yet implemented
+- **Push delivery** (`delivery: push`): MCP channel notifications (`notifications/claude/channel`) don't work in `claude -p` mode with current Claude Code version (v2.1.81). Deferred until the flag is available.
+- **Filesystem write permissions per agent**: Would prevent coordinator from writing to worker status directories.
+- **Message authentication/signing**: Inter-agent messages are plaintext — no integrity checking.
+
+## Design Implications (unchanged)
+
+The principles from the original document remain correct:
+- Runtime exposes capabilities, doesn't impose policy
+- Policy belongs in YAML/prompts, visible and versioned
+- Enforcement is an experimental variable, used sparingly
+- Training data should reflect visible environment structure
 
 ---
 
--- Shoshin | 2026-03-07
+-- Shoshin | 2026-03-28
