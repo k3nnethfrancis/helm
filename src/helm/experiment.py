@@ -193,6 +193,15 @@ class Experiment:
         }
         hub = self.config.get_hub_agent()
         coord_backend_config["hub_agent_id"] = hub.id if hub else None
+        coord_backend_config["experiment_id"] = self.experiment_id
+        # Pass raw agent configs so broker can build topology rules
+        coord_backend_config["_raw_agents"] = {
+            a.id: {
+                "role": a.role.value if a.role else "peer",
+                "can_message": a.can_message if hasattr(a, "can_message") else [],
+            }
+            for a in self.config.agents
+        }
         await self._backend.setup(self.experiment_dir, agent_ids, coord_backend_config)
 
         # Write topology enforcement config for helm-agent CLI
@@ -248,11 +257,17 @@ class Experiment:
 
         session_id = f"helm-{self.experiment_id}-{agent.id}"
         session_agent = self._resolve_session_agent(agent.harness)
+        # Get MCP config path from broker backend if available
+        mcp_path = None
+        if hasattr(self._backend, "get_mcp_config_path"):
+            mcp_path = self._backend.get_mcp_config_path(agent.id)
+
         session_config = SessionConfig(
             agent=session_agent,
             permission_mode="bypass",
             cwd=str(self._session_working_directory()),
             disallowed_tools=agent.disallowed_tools,
+            mcp_config_path=mcp_path,
         )
 
         await self._sdk.create_session(session_id, session_config)

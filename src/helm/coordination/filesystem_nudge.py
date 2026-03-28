@@ -549,9 +549,9 @@ class FilesystemNudgeBackend:
     def _parse_message_filename(self, filename: str) -> tuple[str | None, str | None]:
         """Parse sender and recipient from message filename.
 
-        Expected format: {timestamp}-{sender}-{recipient}.md
-        E.g.: 20260207-143000-researcher-implementer.md
-              20260207-143000-reviewer-all.md (broadcast)
+        Supports two formats:
+        - helm-agent CLI: {timestamp}-{sender}-to-{recipient}.md
+        - Legacy:         {timestamp}-{sender}-{recipient}.md
         """
         stem = filename.rsplit(".", 1)[0]  # Remove .md
         # Try to match against known agent IDs
@@ -559,11 +559,14 @@ class FilesystemNudgeBackend:
             for other_id in self._agents:
                 if agent_id == other_id:
                     continue
-                pattern = f"-{agent_id}-{other_id}"
-                if pattern in stem:
+                # helm-agent format: -sender-to-recipient
+                if f"-{agent_id}-to-{other_id}" in stem:
                     return agent_id, other_id
-            # Check for broadcast pattern: -{agent}-all
-            if f"-{agent_id}-all" in stem:
+                # Legacy format: -sender-recipient
+                if f"-{agent_id}-{other_id}" in stem:
+                    return agent_id, other_id
+            # Broadcast patterns
+            if f"-{agent_id}-to-all" in stem or f"-{agent_id}-all" in stem:
                 return agent_id, "__all__"
         return None, None
 

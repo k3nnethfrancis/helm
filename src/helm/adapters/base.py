@@ -28,6 +28,7 @@ class SessionConfig:
     cwd: str | None = None
     session_marker: str | None = None
     disallowed_tools: list[str] = field(default_factory=list)
+    mcp_config_path: str | None = None
 
 
 class SDKEvent:

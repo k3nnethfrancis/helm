@@ -9,13 +9,15 @@ from __future__ import annotations
 from typing import Any
 
 from helm.coordination.base import CoordinationBackend
+from helm.coordination.broker_backend import BrokerBackend
 from helm.coordination.filesystem_nudge import FilesystemNudgeBackend
 
 # Registry: mechanism name -> backend constructor
 _REGISTRY: dict[str, type] = {
     "filesystem": FilesystemNudgeBackend,
     "filesystem_nudge": FilesystemNudgeBackend,
-    "messaging": FilesystemNudgeBackend,  # messaging also uses filesystem under the hood
+    "messaging": BrokerBackend,
+    "broker": BrokerBackend,
 }
 
 

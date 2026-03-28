@@ -33,6 +33,8 @@ class ClaudeAdapter(HarnessAdapter):
             cmd.extend(["--add-dir", config.cwd])
         if config.disallowed_tools:
             cmd.extend(["--disallowedTools", ",".join(config.disallowed_tools)])
+        if config.mcp_config_path:
+            cmd.extend(["--mcp-config", config.mcp_config_path])
         return cmd, None
 
     def parse_event(self, data: dict[str, Any]) -> SDKEvent | None:

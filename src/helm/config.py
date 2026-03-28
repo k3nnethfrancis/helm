@@ -155,6 +155,8 @@ class CoordinationConfig(BaseModel):
     """Configuration for inter-agent coordination."""
 
     mechanism: CoordinationMechanism = CoordinationMechanism.FILESYSTEM
+    delivery: str = "poll"  # "push" or "poll"
+    enforcement: str = "prompt-only"  # "mechanical" or "prompt-only"
     paths: CoordinationPaths = Field(default_factory=CoordinationPaths)
     channels: list[CoordinationChannelConfig] = Field(default_factory=list)
     backend_settings: dict[str, Any] = Field(default_factory=dict)
