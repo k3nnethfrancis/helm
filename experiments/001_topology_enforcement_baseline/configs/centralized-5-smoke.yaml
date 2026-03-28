@@ -1,12 +1,5 @@
-# Experiment 001: Centralized hub-and-spoke (5 agents)
-# 8 curated SWE-bench tasks with mechanical topology enforcement
-#
-# Usage:
-#   uv run helm benchmark run experiments/001_topology_enforcement_baseline/configs/centralized-5.yaml \
-#     -n 8 --direct-cli --on-turn-limit end \
-#     --experiments-dir experiments/001_topology_enforcement_baseline/runs
-
-name: exp001-centralized-5
+# Smoke test: centralized@5 with broker messaging on one easy task
+name: exp001-centralized-5-smoke
 
 agents:
   - id: coordinator
@@ -48,7 +41,7 @@ agents:
 
       ## Instructions
 
-      1. Check your inbox for assignments from the coordinator. If none yet, poll every few seconds.
+      1. Check your inbox for assignments from the coordinator. If none yet, start reading the task and codebase so you're ready.
       2. Investigate the assigned topic thoroughly.
       3. Message the coordinator with your findings when done.
       4. Do not coordinate laterally with other workers. Do not write the global done signal.
@@ -62,7 +55,7 @@ agents:
 
       ## Instructions
 
-      1. Check your inbox for assignments from the coordinator. If none yet, poll every few seconds.
+      1. Check your inbox for assignments from the coordinator. If none yet, start reading the task and codebase so you're ready.
       2. Investigate the assigned topic thoroughly.
       3. Message the coordinator with your findings when done.
       4. Do not coordinate laterally with other workers. Do not write the global done signal.
@@ -76,7 +69,7 @@ agents:
 
       ## Instructions
 
-      1. Check your inbox for assignments from the coordinator. If none yet, poll every few seconds.
+      1. Check your inbox for assignments from the coordinator. If none yet, start reading the task and codebase so you're ready.
       2. Make minimal, targeted changes in the workspace as assigned.
       3. Message the coordinator with a summary of what you changed when done.
       4. Do not coordinate laterally with other workers. Do not write the global done signal.
@@ -90,7 +83,7 @@ agents:
 
       ## Instructions
 
-      1. Check your inbox for assignments from the coordinator. If none yet, poll every few seconds.
+      1. Check your inbox for assignments from the coordinator. If none yet, start reading the task and codebase so you're ready.
       2. Run targeted reproduction tests and broader regression checks as assigned.
       3. Message the coordinator with your verdict: PASS (with evidence) or FAIL (with details).
       4. Do not coordinate laterally with other workers. Do not write the global done signal.
@@ -117,14 +110,7 @@ benchmark:
   id: princeton-nlp/SWE-bench_Verified
   dataset_path: data/swe_bench_verified.jsonl
   example_ids:
-    - sympy__sympy-17630
-    - sympy__sympy-21930
-    - django__django-13195
     - pytest-dev__pytest-5809
-    - django__django-12754
-    - matplotlib__matplotlib-23412
-    - sphinx-doc__sphinx-8638
-    - pytest-dev__pytest-7205
   verifier:
     mode: command
     command: >-
