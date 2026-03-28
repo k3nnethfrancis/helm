@@ -53,7 +53,7 @@ class BrokerBackend:
         config: dict[str, Any],
     ) -> None:
         """Start the broker and generate per-agent MCP configs."""
-        self._experiment_dir = Path(experiment_dir)
+        self._experiment_dir = Path(experiment_dir).resolve()
         self._agents = agents
         self._config = config
 
@@ -106,7 +106,7 @@ class BrokerBackend:
                             "HELM_AGENT_ID": agent_id,
                             "HELM_BROKER_URL": f"http://127.0.0.1:{port}",
                             "HELM_EXPERIMENT_DIR": str(
-                                self._experiment_dir
+                                self._experiment_dir.resolve()
                             ),
                             "HELM_EXPERIMENT_ID": config.get(
                                 "experiment_id", ""
@@ -122,10 +122,10 @@ class BrokerBackend:
             config_path.write_text(json.dumps(mcp_config, indent=2))
 
     def get_mcp_config_path(self, agent_id: str) -> str | None:
-        """Return the path to this agent's MCP config file."""
+        """Return the absolute path to this agent's MCP config file."""
         if self._experiment_dir is None:
             return None
-        path = self._experiment_dir / "mcp-configs" / f"{agent_id}.json"
+        path = (self._experiment_dir / "mcp-configs" / f"{agent_id}.json").resolve()
         return str(path) if path.exists() else None
 
     def get_prompt_instructions(self, agent_id: str) -> str:
