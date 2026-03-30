@@ -154,7 +154,6 @@ class BrokerBackend:
             "Use the `helm_send_message` tool to send messages to other agents.\n"
             "Use `helm_check_inbox` to check for new messages from other agents.\n"
             "Use `helm_list_peers` to see who else is in the experiment.\n"
-            "Check your inbox after doing meaningful work — don't poll on every turn.\n"
         )
 
     async def start_watching(

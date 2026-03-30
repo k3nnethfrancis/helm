@@ -620,14 +620,12 @@ Your peers:
         if mechanism == CoordinationMechanism.MESSAGING:
             return f"""## Coordination Protocol (messaging)
 
-Coordinate exclusively through the messaging CLI. Do NOT write to `coordination/tasks/` or `coordination/status/`.
+Coordinate exclusively through the helm-messaging MCP tools. Do NOT write to `coordination/tasks/` or `coordination/status/`.
 
-- Send a message: `python -m helm.agent_cli send --from {agent_id} --to <recipient> --msg "..."`
-- Check your inbox: `python -m helm.agent_cli inbox --agent {agent_id}`
-
-The only files you should write to `coordination/` are global signals:
-- `coordination/signals/verification-summary.md` (coordinator only, after reviewer confirms PASS)
-- `coordination/signals/done` (coordinator only, to end the experiment)
+- Use `helm_send_message` to send messages to other agents
+- Use `helm_check_inbox` to check for new messages
+- Use `helm_list_peers` to see who is in the experiment
+- Use `helm_signal_done` to signal experiment completion (coordinator only)
 """
 
         # Default: filesystem

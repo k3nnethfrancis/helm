@@ -161,8 +161,7 @@ TOOLS = [
         "name": "helm_check_inbox",
         "description": (
             "Check for new messages from other agents. "
-            "Returns only messages received since your last check. "
-            "Call this periodically to see if other agents have sent you anything."
+            "Returns only messages received since your last check."
         ),
         "inputSchema": {
             "type": "object",
@@ -182,8 +181,8 @@ TOOLS = [
     {
         "name": "helm_signal_done",
         "description": (
-            "Signal that the experiment is complete. Writes the verification "
-            "summary and done signal. Only the coordinator should call this."
+            "Signal that the experiment is complete. Writes a verification "
+            "summary and the done signal to end the experiment run."
         ),
         "inputSchema": {
             "type": "object",
