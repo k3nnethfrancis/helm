@@ -179,8 +179,10 @@ TOOLS = [
     {
         "name": "signal_complete",
         "description": (
-            "Signal that the work is complete. Provide a summary of what "
-            "was accomplished and the final status."
+            "Signal that the work is complete and end this session. "
+            "Provide a summary of what was accomplished, including which "
+            "tasks succeeded and which failed. Once called, no further "
+            "work can be done."
         ),
         "inputSchema": {
             "type": "object",
