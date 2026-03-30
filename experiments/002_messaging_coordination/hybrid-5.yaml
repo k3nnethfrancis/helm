@@ -150,4 +150,3 @@ benchmark:
 
 limits:
   max_duration: 60m
-  max_budget_usd: 50.0

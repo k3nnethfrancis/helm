@@ -277,7 +277,10 @@ class LimitsConfig(BaseModel):
 
     max_duration: str = "30m"
     max_turns_per_agent: int = 50
-    max_budget_usd: float = 15.00
+    # NOTE: max_budget_usd is metadata only — NOT enforced at runtime.
+    # Cost is only known after each agent session ends (from the result event).
+    # The real safety net is max_duration.
+    max_budget_usd: float | None = None
     blocked_commands: list[str] = Field(
         default_factory=lambda: ["rm -rf", "sudo"]
     )
