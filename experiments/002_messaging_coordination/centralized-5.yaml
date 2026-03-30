@@ -155,6 +155,5 @@ benchmark:
     pass_exit_codes: [0]
 
 limits:
-  max_duration: 45m
-  max_turns_per_agent: 60
-  max_budget_usd: 25.0
+  max_duration: 60m
+  max_budget_usd: 50.0
