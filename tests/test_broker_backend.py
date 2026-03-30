@@ -82,10 +82,8 @@ def test_broker_backend_uses_agent_policies_for_topology_and_capabilities(tmp_pa
         delegator_env = delegator_config["mcpServers"]["helm-messaging"]["env"]
         worker_env = worker_config["mcpServers"]["helm-messaging"]["env"]
 
-        assert delegator_env["HELM_CAN_SPAWN"] == "true"
         assert delegator_env["HELM_CAN_SIGNAL_DONE"] == "true"
         assert delegator_env["HELM_AGENT_ROLE"] == "hub"
-        assert worker_env["HELM_CAN_SPAWN"] == "false"
         assert worker_env["HELM_CAN_SIGNAL_DONE"] == "false"
         assert worker_env["HELM_AGENT_ROLE"] == "worker"
 
@@ -155,31 +153,3 @@ def test_broker_update_topology_endpoint_supports_parent_child_spawn() -> None:
     asyncio.run(_run())
 
 
-def test_broker_backend_schedules_push_on_captured_loop() -> None:
-    backend = BrokerBackend()
-    scheduled: dict[str, object] = {}
-
-    class _FakeLoop:
-        def call_soon_threadsafe(self, callback, *args) -> None:  # type: ignore[no-untyped-def]
-            scheduled["callback"] = callback
-            scheduled["args"] = args
-
-    async def _push(agent_id: str, content: str) -> None:
-        return None
-
-    backend._loop = _FakeLoop()  # type: ignore[assignment]
-    backend._push_callback = _push
-    backend._agent_sessions = {"worker": "session-1"}
-
-    backend._on_broker_message(
-        Message(
-            id=1,
-            from_id="parent",
-            to_id="worker",
-            content="hello",
-            timestamp=0.0,
-        )
-    )
-
-    assert scheduled["callback"] == backend._schedule_push_message
-    assert scheduled["args"] == ("worker", "[Message from parent]:\nhello")

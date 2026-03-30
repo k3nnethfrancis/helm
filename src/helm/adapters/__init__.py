@@ -1,4 +1,4 @@
-"""Helm adapters subpackage -- SDK client, DirectCLI client, and harness adapters."""
+"""Helm adapters subpackage -- SDK client, headless CLI client, and harness adapters."""
 
 from helm.adapters.base import (
     API_PREFIX,
@@ -12,10 +12,12 @@ from helm.adapters.base import (
 )
 from helm.adapters.claude import ClaudeAdapter
 from helm.adapters.codex import CodexAdapter
-from helm.adapters.direct_cli import DirectCLIClient, get_harness_adapter
+from helm.adapters.direct_cli import HeadlessCLIClient, get_harness_adapter
+
+# Backward compat
+DirectCLIClient = HeadlessCLIClient
 from helm.adapters.opencode import OpenCodeAdapter
 from helm.adapters.sdk_client import SDKClient, sdk_client
-from helm.adapters.tmux_cli import TmuxCLIClient
 
 _HARNESS_ADAPTERS: dict[str, type[HarnessAdapter]] = {
     "claude": ClaudeAdapter,
@@ -28,16 +30,16 @@ __all__ = [
     "ClaudeAdapter",
     "CodexAdapter",
     "DIRECTCLI_STREAM_READER_LIMIT",
-    "DirectCLIClient",
     "FollowUpMessageUnsupportedError",
     "HarnessAdapter",
+    "DirectCLIClient",
+    "HeadlessCLIClient",
     "OpenCodeAdapter",
     "SDKClient",
     "SDKConfig",
     "SDKEvent",
     "SessionConfig",
     "_CLAUDE_SESSION_VARS",
-    "TmuxCLIClient",
     "_HARNESS_ADAPTERS",
     "get_harness_adapter",
     "sdk_client",

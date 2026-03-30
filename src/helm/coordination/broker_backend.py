@@ -45,9 +45,6 @@ class BrokerBackend:
         self._agents: list[str] = []
         self._config: dict[str, Any] = {}
         self._on_message: OnMessageCallback | None = None
-        self._push_callback: Any = None
-        self._agent_sessions: dict[str, str] = {}
-        self._loop: asyncio.AbstractEventLoop | None = None
         self._poll_task: asyncio.Task | None = None
         self._running = False
         self._seen_message_ids: set[int] = set()
@@ -98,7 +95,6 @@ class BrokerBackend:
 
         for agent_id in agents:
             policy = agent_policies.get(agent_id, {})
-            can_spawn = bool(policy.get("can_spawn"))
             can_signal_done = bool(policy.get("can_signal_done"))
 
             mcp_config = {
@@ -122,7 +118,6 @@ class BrokerBackend:
                             "HELM_PEERS": json.dumps(
                                 peers_by_agent.get(agent_id, [])
                             ),
-                            "HELM_CAN_SPAWN": str(can_spawn).lower(),
                             "HELM_CAN_SIGNAL_DONE": str(can_signal_done).lower(),
                         },
                     }
@@ -164,23 +159,14 @@ class BrokerBackend:
         on_message: OnMessageCallback,
         push_callback: Any = None,
     ) -> None:
-        """Start monitoring broker for transcript capture.
-
-        If ``push_callback`` is provided, broker messages are pushed
-        into recipient agent sessions (tmux push delivery).
-        """
+        """Start monitoring broker for transcript capture."""
         self._on_message = on_message
-        self._push_callback = push_callback
-        self._agent_sessions = agent_sessions
-        self._loop = asyncio.get_running_loop()
         self._running = True
-        # Also monitor filesystem for signals/done (backward compat)
         self._poll_task = asyncio.create_task(self._poll_signals())
 
     async def stop_watching(self) -> None:
         """Stop monitoring."""
         self._running = False
-        self._loop = None
         if self._poll_task and not self._poll_task.done():
             self._poll_task.cancel()
             try:
@@ -209,25 +195,6 @@ class BrokerBackend:
         if msg.id in self._seen_message_ids:
             return
         self._seen_message_ids.add(msg.id)
-
-        # Push delivery: inject message into recipient's running session
-        if (
-            self._push_callback
-            and self._loop is not None
-            and msg.to_id in self._agent_sessions
-        ):
-            formatted = f"[Message from {msg.from_id}]:\n{msg.content}"
-            try:
-                self._loop.call_soon_threadsafe(
-                    self._schedule_push_message,
-                    msg.to_id,
-                    formatted,
-                )
-                msg.delivered = True
-            except Exception:
-                logger.warning(
-                    "Failed to push message to %s", msg.to_id, exc_info=True
-                )
 
         if self._on_message:
             coord_msg = CoordinationMessage(
@@ -304,21 +271,3 @@ class BrokerBackend:
             peers_map[aid] = peers
         return peers_map
 
-    def _schedule_push_message(self, agent_id: str, content: str) -> None:
-        """Schedule a push callback on the experiment event loop."""
-        if self._loop is None or self._push_callback is None:
-            return
-
-        task = self._loop.create_task(self._push_callback(agent_id, content))
-        task.add_done_callback(
-            lambda finished: self._log_push_failure(agent_id, finished)
-        )
-
-    def _log_push_failure(
-        self, agent_id: str, task: asyncio.Task[Any]
-    ) -> None:
-        """Log asynchronous push callback failures."""
-        try:
-            task.result()
-        except Exception:
-            logger.warning("Failed to push message to %s", agent_id, exc_info=True)

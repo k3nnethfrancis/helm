@@ -32,12 +32,7 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
-import shutil
-import subprocess
 import sys
-import tempfile
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -50,17 +45,11 @@ EXPERIMENT_DIR = os.environ.get("HELM_EXPERIMENT_DIR", "")
 EXPERIMENT_ID = os.environ.get("HELM_EXPERIMENT_ID", "")
 PEERS_JSON = os.environ.get("HELM_PEERS", "[]")
 AGENT_ROLE = os.environ.get("HELM_AGENT_ROLE", "peer")
-# Per-agent capability flags (set by broker_backend based on topology/role)
-CAN_SPAWN = os.environ.get("HELM_CAN_SPAWN", "false").lower() == "true"
+# Per-agent capability flag (set by broker_backend based on topology/role)
 CAN_SIGNAL_DONE = os.environ.get("HELM_CAN_SIGNAL_DONE", "true").lower() == "true"
 
 # Track last seen message ID for incremental polling
 _last_seen_id = 0
-
-TMUX_WIDTH = "220"
-TMUX_HEIGHT = "50"
-TMUX_READY_TIMEOUT_SECONDS = 10.0
-TMUX_READY_POLL_SECONDS = 0.5
 
 
 def _log(msg: str) -> None:
@@ -142,85 +131,6 @@ def _current_peers() -> list[dict]:
     return _load_static_peers()
 
 
-def _capture_tmux_pane(tmux_name: str) -> str:
-    """Capture the visible content of a tmux pane."""
-    result = subprocess.run(
-        ["tmux", "capture-pane", "-t", tmux_name, "-p", "-S", "-50"],
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout if result.returncode == 0 else ""
-
-
-def _pane_is_ready(pane: str) -> bool:
-    """Best-effort readiness signal for the Claude TUI."""
-    return "❯" in pane and "WARNING" not in pane
-
-
-def _wait_for_bypass_dialog(tmux_name: str) -> None:
-    """Wait for Claude's bypass dialog and accept it when it appears."""
-    deadline = time.time() + TMUX_READY_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        pane = _capture_tmux_pane(tmux_name)
-        if "Yes, I accept" in pane:
-            subprocess.run(
-                ["tmux", "send-keys", "-t", tmux_name, "Down"],
-                capture_output=True,
-            )
-            time.sleep(0.3)
-            subprocess.run(
-                ["tmux", "send-keys", "-t", tmux_name, "Enter"],
-                capture_output=True,
-            )
-            return
-        if _pane_is_ready(pane):
-            return
-        time.sleep(TMUX_READY_POLL_SECONDS)
-
-
-def _wait_for_tmux_ready(tmux_name: str) -> None:
-    """Wait until the Claude TUI looks ready for message injection."""
-    deadline = time.time() + TMUX_READY_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        if _pane_is_ready(_capture_tmux_pane(tmux_name)):
-            return
-        time.sleep(TMUX_READY_POLL_SECONDS)
-
-
-def _paste_buffer_into_tmux(tmux_name: str, content: str, prefix: str) -> None:
-    """Send arbitrary text into a tmux session via tmux buffer paste."""
-    fd, tmp_name = tempfile.mkstemp(prefix=prefix, suffix=".txt")
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w") as handle:
-            handle.write(content)
-        buffer_name = prefix.rstrip("_")
-        subprocess.run(
-            ["tmux", "load-buffer", "-b", buffer_name, str(tmp_path)],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["tmux", "paste-buffer", "-b", buffer_name, "-t", tmux_name],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["tmux", "send-keys", "-t", tmux_name, "Enter"],
-            check=True,
-            capture_output=True,
-        )
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-
-def _tmux_session_name(*parts: str) -> str:
-    """Create a tmux-safe session name."""
-    joined = "-".join(part.replace("/", "-").replace(".", "-") for part in parts if part)
-    name = f"helm-{joined}" if joined else "helm-agent"
-    return name[:80]
-
-
 # ── Tool handlers ──
 
 TOOLS = [
@@ -284,34 +194,6 @@ TOOLS = [
                 },
             },
             "required": ["summary"],
-        },
-    },
-    {
-        "name": "helm_spawn_agent",
-        "description": (
-            "Spawn a new agent in the experiment. Creates a new Claude Code "
-            "session in a tmux pane with messaging tools configured. "
-            "The spawned agent can send/receive messages but cannot spawn "
-            "further agents. Only available to agents with spawn permission."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "agent_id": {
-                    "type": "string",
-                    "description": "Unique ID for the new agent (e.g. 'worker-3')",
-                },
-                "task": {
-                    "type": "string",
-                    "description": "The initial task/prompt for the new agent",
-                },
-                "role": {
-                    "type": "string",
-                    "description": "Role label for the agent (default: 'worker')",
-                    "default": "worker",
-                },
-            },
-            "required": ["agent_id", "task"],
         },
     },
 ]
@@ -447,184 +329,11 @@ def _handle_signal_done(args: dict) -> dict:
     }
 
 
-def _handle_spawn_agent(args: dict) -> dict:
-    if not CAN_SPAWN:
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Error: You do not have permission to spawn agents. "
-                    "Only agents with spawn capability can use this tool.",
-                }
-            ],
-            "isError": True,
-        }
-
-    agent_id = args.get("agent_id", "")
-    task = args.get("task", "")
-    role = args.get("role", "worker")
-    if not agent_id or not task:
-        return {
-            "content": [
-                {"type": "text", "text": "Error: 'agent_id' and 'task' are required."}
-            ],
-            "isError": True,
-        }
-
-    # Register spawned agent with broker
-    reg = _broker_post("/register", {
-        "agent_id": agent_id,
-        "experiment_id": EXPERIMENT_ID,
-        "role": role,
-    })
-    if reg.get("error"):
-        return {
-            "content": [{"type": "text", "text": f"Error registering agent: {reg['error']}"}],
-            "isError": True,
-        }
-
-    current_peers = _current_peers()
-    parent_recipients = [
-        peer.get("id")
-        for peer in current_peers
-        if isinstance(peer, dict) and isinstance(peer.get("id"), str)
-    ]
-    if agent_id not in parent_recipients:
-        parent_recipients.append(agent_id)
-
-    parent_update = _broker_post(
-        "/update_topology",
-        {
-            "agent_id": AGENT_ID,
-            "allowed_recipients": parent_recipients,
-        },
-    )
-    if parent_update.get("error"):
-        return {
-            "content": [{"type": "text", "text": f"Error updating parent topology: {parent_update['error']}"}],
-            "isError": True,
-        }
-
-    child_update = _broker_post(
-        "/update_topology",
-        {
-            "agent_id": agent_id,
-            "allowed_recipients": [AGENT_ID],
-        },
-    )
-    if child_update.get("error"):
-        return {
-            "content": [{"type": "text", "text": f"Error updating child topology: {child_update['error']}"}],
-            "isError": True,
-        }
-
-    spawned_peers = [{"id": AGENT_ID, "role": AGENT_ROLE}]
-
-    # Write MCP config for the spawned agent (no spawn capability)
-    mcp_dir = Path(EXPERIMENT_DIR) / "mcp-configs" if EXPERIMENT_DIR else Path("/tmp/helm-tmux-test/mcp-configs")
-    mcp_dir.mkdir(parents=True, exist_ok=True)
-
-    python_bin = sys.executable
-    mcp_config = {
-        "mcpServers": {
-            "helm-messaging": {
-                "command": python_bin,
-                "args": ["-m", "helm.coordination.mcp_server"],
-                "env": {
-                    "HELM_AGENT_ID": agent_id,
-                    "HELM_BROKER_URL": BROKER_URL,
-                    "HELM_EXPERIMENT_DIR": EXPERIMENT_DIR,
-                    "HELM_EXPERIMENT_ID": EXPERIMENT_ID,
-                    "HELM_AGENT_ROLE": role,
-                    "HELM_PEERS": json.dumps(spawned_peers),
-                    "HELM_CAN_SPAWN": "false",  # Spawned agents cannot spawn further
-                    "HELM_CAN_SIGNAL_DONE": "false",
-                    "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
-                },
-            }
-        }
-    }
-    config_path = mcp_dir / f"{agent_id}.json"
-    config_path.write_text(json.dumps(mcp_config, indent=2))
-
-    # Find claude binary
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
-        return {
-            "content": [{"type": "text", "text": "Error: claude CLI not found in PATH"}],
-            "isError": True,
-        }
-
-    # Create tmux session name
-    tmux_name = _tmux_session_name(EXPERIMENT_ID, agent_id)
-
-    # Build the system prompt
-    system_prompt = (
-        f"You are agent '{agent_id}' (role: {role}) in a multi-agent experiment. "
-        f"You were spawned by '{AGENT_ID}'. "
-        f"Use helm_send_message to communicate with other agents. "
-        f"Use helm_check_inbox to check for messages. "
-        f"When done, send your results back to '{AGENT_ID}'."
-    )
-
-    # Spawn tmux session
-    try:
-        subprocess.run(
-            ["tmux", "new-session", "-d", "-s", tmux_name, "-x", TMUX_WIDTH, "-y", TMUX_HEIGHT],
-            check=True,
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError as e:
-        return {
-            "content": [{"type": "text", "text": f"Error creating tmux session: {e.stderr.decode()}"}],
-            "isError": True,
-        }
-
-    # Build claude command
-    claude_cmd = (
-        f"{claude_bin} --permission-mode bypassPermissions "
-        f"--mcp-config {shlex.quote(str(config_path))}"
-    )
-
-    # Send the claude command to tmux
-    subprocess.run(
-        ["tmux", "send-keys", "-t", tmux_name, claude_cmd, "Enter"],
-        check=True,
-        capture_output=True,
-    )
-
-    _wait_for_bypass_dialog(tmux_name)
-    _wait_for_tmux_ready(tmux_name)
-
-    # Send the task via tmux paste-buffer
-    full_prompt = f"{system_prompt}\n\n## Your Task\n{task}"
-    _paste_buffer_into_tmux(
-        tmux_name,
-        full_prompt,
-        f"helm_spawn_{agent_id[-8:]}_",
-    )
-
-    _log(f"spawned agent {agent_id} in tmux session {tmux_name}")
-    return {
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    f"Agent '{agent_id}' spawned in tmux session '{tmux_name}'. "
-                    f"It has messaging tools but cannot spawn further agents. "
-                    f"Send it messages with helm_send_message(to='{agent_id}', ...)."
-                ),
-            }
-        ]
-    }
-
-
 TOOL_HANDLERS = {
     "helm_send_message": _handle_send_message,
     "helm_check_inbox": _handle_check_inbox,
     "helm_list_peers": _handle_list_peers,
     "helm_signal_done": _handle_signal_done,
-    "helm_spawn_agent": _handle_spawn_agent,
 }
 
 
@@ -672,8 +381,6 @@ def main() -> None:
             # Filter tools based on agent capabilities
             available = []
             for tool in TOOLS:
-                if tool["name"] == "helm_spawn_agent" and not CAN_SPAWN:
-                    continue
                 if tool["name"] == "helm_signal_done" and not CAN_SIGNAL_DONE:
                     continue
                 available.append(tool)

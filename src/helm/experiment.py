@@ -30,7 +30,7 @@ from helm.coordination import CoordinationBackend, CoordinationMessage, create_b
 from helm.runtime_guard import RuntimeGuard
 from helm.run_data import save_run_data
 from helm.sdk import (
-    DirectCLIClient, SDKClient, SDKConfig, SDKEvent, SessionConfig,
+    HeadlessCLIClient, SDKClient, SDKConfig, SDKEvent, SessionConfig,
     _HARNESS_ADAPTERS,
 )
 from helm.topologies import COORDINATION_FAMILY_LABELS
@@ -88,8 +88,7 @@ class Experiment:
         self.experiment_id = f"{config.name}-{uuid.uuid4().hex[:8]}"
         self.experiment_dir = experiments_dir / self.experiment_id
 
-        # SDK client: SDKClient, DirectCLIClient, or TmuxCLIClient
-        self._sdk: Any = None
+        self._sdk: SDKClient | HeadlessCLIClient | None = None
         self._backend: CoordinationBackend | None = None
         self._orchestrator: RuntimeGuard | None = None
         self._collector: EventCollector | None = None
@@ -151,18 +150,10 @@ class Experiment:
         # Pass through as-is and let SDK validate/accept it.
         return normalized
 
-    def _should_use_push_delivery(self) -> bool:
-        """Use follow-up message injection when coordination delivery is ``push``.
-
-        Tmux sessions provide a pseudo-TTY so interactive claude can
-        accept follow-up messages injected via ``tmux paste-buffer``.
-        """
-        return self.config.coordination.delivery == "push"
-
     def _should_use_direct_cli(self) -> bool:
-        """Decide whether to use DirectCLIClient instead of the SDK daemon.
+        """Decide whether to use HeadlessCLIClient instead of the SDK daemon.
 
-        Auto-selects DirectCLIClient when all agents have a registered
+        Auto-selects HeadlessCLIClient when all agents have a registered
         harness adapter (claude, codex, etc.).  Falls back to the SDK
         daemon only for unknown harnesses.
         Can be overridden via the ``use_direct_cli`` constructor parameter.
@@ -213,11 +204,8 @@ class Experiment:
         self._write_helm_config()
 
         # Select agent backend
-        if self._should_use_push_delivery():
-            from helm.adapters.tmux_cli import TmuxCLIClient
-            self._sdk = TmuxCLIClient()
-        elif self._should_use_direct_cli():
-            self._sdk = DirectCLIClient()
+        if self._should_use_direct_cli():
+            self._sdk = HeadlessCLIClient()
         else:
             sdk_config = SDKConfig(binary_path=self.sdk_binary_path)
             self._sdk = SDKClient(sdk_config)
@@ -475,14 +463,10 @@ class Experiment:
 
             # Start coordination backend watcher
             if self._backend and self._sdk:
-                push_cb = (
-                    self._push_to_agent if self._should_use_push_delivery() else None
-                )
                 await self._backend.start_watching(
                     self._sdk,
                     self._agent_sessions,
                     on_message=self._record_coordination_message,
-                    push_callback=push_cb,
                 )
 
             # Wait for completion
@@ -757,12 +741,6 @@ Coordinate through shared files in the `coordination/` directory.
         """Route a coordination message from the backend to the collector."""
         if self._collector:
             self._collector.record_coordination(message)
-
-    async def _push_to_agent(self, agent_id: str, content: str) -> None:
-        """Push a message into a running agent session (tmux only)."""
-        session_id = self._agent_sessions.get(agent_id)
-        if session_id and self._sdk:
-            await self._sdk.post_message(session_id, content)
 
     def _all_agents_done(self) -> bool:
         """Check if all agents have signaled done via the coordination backend."""

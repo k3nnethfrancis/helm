@@ -1,4 +1,8 @@
-"""DirectCLIClient -- runs agent CLI subprocesses instead of the SDK daemon."""
+"""HeadlessCLIClient -- runs agent CLI subprocesses in headless mode.
+
+Each agent gets a single ``-p`` (print) invocation with full NDJSON
+streaming.  Produces complete, traceable transcripts for every agent.
+"""
 
 from __future__ import annotations
 
@@ -41,8 +45,8 @@ class _CLISession:
     started: bool = False
 
 
-class DirectCLIClient:
-    """Drop-in replacement for SDKClient that runs agent CLIs directly.
+class HeadlessCLIClient:
+    """Runs agent CLIs in headless mode with full NDJSON traceability.
 
     Spawns one headless CLI process per agent session, using per-harness
     adapters to construct commands and parse NDJSON output.

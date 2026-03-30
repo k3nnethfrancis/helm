@@ -34,25 +34,30 @@ Helm composes with benchmarks rather than replacing them. Existing benchmarks pr
 
 The canonical artifact in Helm is not a model answer. It is a **swarm rollout**: task, policy, harness, trace, verifier result, and behavioral scores.
 
-## Near-Term Program
+## Current State
 
-The current phase is **building real-time inter-agent messaging** to enable clean multi-agent experiment data.
+Helm runs multi-agent experiments with full traceability. Each agent is a headless CLI session (`claude -p`, `codex exec`, etc.) producing complete NDJSON event streams. Agents coordinate through MCP messaging tools (broker-routed) or filesystem artifacts. Everything is traced and judgeable.
 
-### What's done
-- **Experiment 001 single-agent baseline:** 8/8 tasks complete, 50% solve rate, clean behavioral profiles
-- **Experiment 001 centralized@5:** Two rounds run — found systematic coordinator collapse, then polling waste after prompt tightening
-- **Judge validation (J4):** 5/6 behavioral dimensions validated via cross-judge counterparty comparison
-- **Judge visibility fix:** Found and fixed `tool_use` vs `tool_call` type mismatch — all tool calls were invisible to judge
-- **Topology enforcement:** Mechanical enforcement via `--disallowedTools`. 1.00 structural compliance on all enforced runs.
-- **Config-driven coordination:** `CoordinationMechanism` enum (`filesystem` | `messaging`) drives prompt injection and backend setup
-- **Transcript viewer:** `helm view <experiment-id>` renders per-agent HTML panels with coordination log, markdown rendering, metadata
-- **Topology compliance analyzer:** Deterministic extraction of tool usage and coordination patterns from transcripts
+### What's working
+- **Headless agent runtime:** Per-agent CLI sessions with full NDJSON traceability
+- **Messaging broker:** HTTP broker routes messages between agents. Per-agent MCP server provides native tools (`helm_send_message`, `helm_check_inbox`, `helm_list_peers`, `helm_signal_done`)
+- **Config-driven coordination:** `mechanism: filesystem | messaging`, `enforcement: mechanical | prompt-only`
+- **Topology enforcement:** `--disallowedTools` mechanically blocks native Agent/TeamCreate/SendMessage. Broker topology rules optionally enforce messaging permissions.
+- **Behavioral judge:** 5 validated dimensions scored against traces
+- **Transcript viewer:** `helm view <experiment-id>` renders per-agent HTML panels
+- **SWE-bench integration:** Benchmark adapter, workspace staging, test verification
+
+### Experiment 001 findings
+- Single-agent baseline: 8/8 tasks, 50% solve rate, clean behavioral profiles
+- Centralized@5 v1: coordinator systematically collapsed topology (edited code, wrote fake status)
+- Centralized@5 v2 (messaging-only): coordinator follows rules but agents waste 30-50% of turns polling empty inboxes
+- Key finding: structural compliance (tool blocking) ≠ behavioral compliance (actual agent decisions). The gap is itself research data.
 
 ### What's next
-1. Build Helm-native push messaging (broker + channel delivery) so agents can receive messages in real-time
-2. Re-run centralized@5 with push messaging to validate coordination works
-3. Run remaining topologies (hybrid@5, delegating@1)
-4. Blog post: single-agent vs multi-agent coordination on SWE-bench
+1. Re-run centralized@5 with improved prompting (plan-then-execute instead of continuous polling)
+2. Run hybrid@5 and delegating@1 topologies
+3. Blog post: single-agent vs multi-agent, coordination overhead, what makes multi-agent worth it
+4. Adversarial experiment: hidden-objective agent in hub-spoke topology
 
 ## What Helm Does
 
@@ -153,36 +158,24 @@ Helm adds:
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
-- [Sandbox Agent SDK binary](https://github.com/rivet-dev/sandbox-agent) for the SDK-daemon path
-- Direct CLI access to Claude Code / Codex / OpenCode for the adapter path (`--direct-cli`)
+- Direct CLI access to Claude Code / Codex / OpenCode (headless mode)
 
 ### Install
 
 ```bash
-# Clone the repo
 git clone https://github.com/k3nnethfrancis/helm.git
 cd helm
-
-# Install Python package
 uv pip install -e .
-
-# Install SDK binary (optional if you only use `--direct-cli`)
-mkdir -p bin
-curl -fsSL https://releases.rivet.dev/sandbox-agent/latest/install.sh | sh
-# Move the binary to bin/sandbox-agent
 ```
 
 ### Run an Experiment
 
 ```bash
 # Run a single-agent experiment on one SWE-bench task
-helm benchmark run configs/single-agent.yaml -n 1 --direct-cli --on-turn-limit end
+helm benchmark run configs/single-agent.yaml -n 1 --on-turn-limit end
 
 # Run a centralized 5-agent swarm
-helm benchmark run configs/centralized-5.yaml -n 1 --direct-cli --on-turn-limit end
-
-# Run a delegating agent (can spawn subagents)
-helm benchmark run configs/delegating-1.yaml -n 1 --direct-cli --on-turn-limit end
+helm benchmark run configs/centralized-5.yaml -n 1 --on-turn-limit end
 
 # Judge an experiment on behavioral dimensions
 helm judge <experiment-id> -b claude-headless -m claude-sonnet-4-6
@@ -271,32 +264,14 @@ limits:
 
 Agent system prompts should include: their role, who their peers are, how many agents are in the system, and how to coordinate. This context is critical for generating useful training traces.
 
-## Included Experiment Patterns
+## Topology Configs
 
-| Pattern | Topology | Agents | Purpose |
-|---------|----------|--------|---------|
-| `experiment-peer-penguins.yaml` | Peer network | 3 | Baseline coordination on data science task |
-| `experiment-hub-spoke-penguins.yaml` | Hub-spoke | 3 | Same task, different topology |
-| `experiment-peer-adversarial-data.yaml` | Peer network | 3 | Failure suppression under corrupted data |
-| `experiment-peer-constraint-puzzle.yaml` | Peer network | 3 | Negotiation under conflicting constraints |
-| `experiment-hub-spoke-parallel-build.yaml` | Hub-spoke | 5 | Scale effects, hub bottleneck |
-| `benchmark-swebench-single-claude.yaml` | Single | 1 | Claude baseline on SWE-bench |
-| `benchmark-swebench-single-gpt5.yaml` | Single | 1 | GPT-5 baseline on SWE-bench |
-| `benchmark-swebench-hubspoke-claude.yaml` | Hub-spoke | 3 | Multi-agent Claude on SWE-bench |
-| `benchmark-swebench-hubspoke-gpt5.yaml` | Hub-spoke | 3 | Multi-agent GPT-5 on SWE-bench |
-| `benchmark-swebench-peer-claude.yaml` | Peer | 3 | Peer network Claude on SWE-bench |
-| `benchmark-swebench-peer-gpt5.yaml` | Peer | 3 | Peer network GPT-5 on SWE-bench |
-
-## Example Results
-
-The `experiments/hub-spoke-parallel-build-c2e0a21d/` directory contains a complete scored experiment run — 5 agents building a CLI tool with hidden cross-cutting dependencies.
-
-| Dimension | Score | Key Finding |
-|-----------|-------|-------------|
-| Resource Waste | 4/10 | Workers raced ahead before architecture decisions arrived, then redid work |
-| Context Degradation | 5/10 | Hub's architecture docs described interfaces that didn't match actual code |
-| Escalation Calibration | 3/10 | Zero escalations to human despite genuine ambiguities |
-| Goal Drift | 7/10 | All subcommands built despite coordination failures |
+| Config | Topology | Agents | Purpose |
+|--------|----------|--------|---------|
+| `single-agent.yaml` | Single | 1 | Baseline — no coordination overhead |
+| `centralized-5.yaml` | Hub-spoke | 5 | Coordinator + 4 workers, all coordination through hub |
+| `hybrid-5.yaml` | Hybrid | 5 | Hub + lateral peer messaging between workers |
+| `delegating-1.yaml` | Delegating | 1+ | Single coordinator that decomposes work (dynamic) |
 
 ## Project Structure
 

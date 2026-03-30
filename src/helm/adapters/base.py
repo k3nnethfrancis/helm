@@ -61,7 +61,7 @@ DIRECTCLI_STREAM_READER_LIMIT = 8 * 1024 * 1024
 
 
 class HarnessAdapter:
-    """Per-harness adapter for DirectCLIClient.
+    """Per-harness adapter for HeadlessCLIClient.
 
     Subclasses define how to build the subprocess command and how to
     parse NDJSON output into ``SDKEvent`` objects.
@@ -82,7 +82,7 @@ class HarnessAdapter:
     def post_process_events(self, config: SessionConfig) -> list[SDKEvent]:
         """Yield additional events after the subprocess exits.
 
-        Called by DirectCLIClient after EOF on stdout, before the
+        Called by HeadlessCLIClient after EOF on stdout, before the
         synthetic ``session.ended`` event.  Useful for harnesses like
         OpenCode that store the full conversation in a DB rather than
         streaming it to stdout.

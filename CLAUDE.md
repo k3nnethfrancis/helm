@@ -29,44 +29,27 @@ This breaks down into:
 
 **Tmux-based push delivery works end-to-end. Coordinator can spawn agents dynamically. Per-agent capability controls are mechanical.**
 
-**What shipped this session (2026-03-28/29):**
-
-**Tmux adapter for persistent interactive sessions:**
-- `TmuxCLIClient` manages persistent `claude` sessions in tmux panes
-- Messages injected via `tmux load-buffer` + `paste-buffer` (handles arbitrary content safely)
-- Automatically navigates the bypass-permissions TUI dialog
-- `ResumableCLIClient` also built as alternative using `claude -p --session-id UUID` + `--resume UUID` for sequential subprocess approach
-- Selected when `delivery: push` in experiment YAML config
-
-**`helm_spawn_agent` MCP tool:**
-- Coordinator can spawn new claude sessions in tmux at runtime
-- Spawned agents get messaging tools but CANNOT spawn further agents (no recursive spawning)
-- MCP config generated dynamically with per-agent env vars
-
-**Per-agent capability controls (three layers):**
-1. **Mechanical (CLI)**: `--disallowedTools` blocks native Agent/TeamCreate/SendMessage
-2. **Capability (MCP)**: `HELM_CAN_SPAWN`, `HELM_CAN_SIGNAL_DONE` env vars — MCP server dynamically filters `tools/list` response so agents literally never see tools they can't use
-3. **Transport (broker)**: Topology rules on who can message whom, with optional mechanical enforcement
-
-**Integration test results (2026-03-29):**
-- 3 agents in tmux with MCP messaging: full hub-spoke coordination verified
-- Coordinator dispatched tasks to 2 workers, both completed and reported back (7 messages total)
-- Coordinator spawned a new agent via `helm_spawn_agent` → spawned agent sent "I am alive and ready" back
-- Worker tried to spawn → tool not visible (capability control works)
+**Architecture simplified (2026-03-29):**
+- **Headless-only runtime.** Removed TmuxCLIClient, ResumableCLIClient, helm_spawn_agent. One client: `HeadlessCLIClient` (renamed from DirectCLIClient). Full NDJSON traceability on every run.
+- **Messaging broker + MCP tools** for inter-agent coordination. Agents call `helm_check_inbox` as a traced tool call — fully observable, no hidden side channels.
+- **Per-agent capability controls**: `HELM_CAN_SIGNAL_DONE` env var. MCP server filters tool list so agents only see tools they're allowed to use.
+- **Topology enforcement**: Mechanical (`--disallowedTools` + broker rules) or prompt-only — configurable per experiment.
+- Tmux/push delivery infrastructure preserved at commit `2174267` for rollback if needed.
 
 **Experiment 001 results (from 2026-03-27/28):**
 - Single-agent baseline: 8/8 complete, 4/8 solved (50%), clean behavioral profiles
 - Centralized@5 v1 (old prompts): coordinator systematically collapsed topology
 - Centralized@5 v2 (messaging-only): coordinator follows rules but agents burn ~50% of turns polling
+- Key finding: structural compliance ≠ behavioral compliance. The gap is research data.
 
-**Design principle established:** Helm is a research instrument, not an opinionated framework. The YAML config declares experimental conditions (topology, communication channel, enforcement level, delivery mechanism). Helm executes faithfully. The researcher decides what to enforce mechanically vs leave to prompting.
+**Design principle established:** Helm is a research instrument, not an opinionated framework. The YAML config declares experimental conditions. Helm executes faithfully. The researcher decides what to enforce mechanically vs leave to prompting. See `notes/shoshin-codex/projects/helm/principles.md`.
 
 ### Immediate Next Steps
 
-1. **Re-run centralized@5** with tmux adapter + push delivery — validate coordination works without polling waste
-2. **Run remaining topologies** (hybrid@5, delegating@1) with push delivery
-3. **Blog post** — single-agent vs multi-agent, coordination overhead, what infrastructure makes multi-agent worth it
-4. **Code review + cleanup** — simplify after rapid iteration
+1. **Re-run centralized@5** with improved prompting (plan-then-execute, not continuous polling)
+2. **Run hybrid@5 and delegating@1** topologies
+3. **Blog post** — single-agent vs multi-agent, coordination overhead
+4. **Adversarial experiment** — hidden-objective agent in hub-spoke topology
 
 ### Medium-Term
 
