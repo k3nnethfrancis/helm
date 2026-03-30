@@ -115,14 +115,6 @@ class CoordinationBackend(Protocol):
         """
         ...
 
-    def get_prompt_instructions(self, agent_id: str) -> str:
-        """Return coordination instructions to inject into an agent's prompt.
-
-        Returns empty string if the backend doesn't need to override
-        the YAML-defined system prompts (e.g., filesystem backend).
-        """
-        ...
-
     async def start_watching(
         self,
         sdk: SDKClient,

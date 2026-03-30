@@ -449,7 +449,7 @@ class Experiment:
                 for worker in self.config.get_worker_agents():
                     await self._run_agent(
                         worker,
-                        "You are now active. Check your task queue for assignments.",
+                        "You are now active.",
                         timeout,
                     )
             else:
@@ -515,129 +515,66 @@ class Experiment:
         task: str,
         timeout: float,
     ) -> None:
-        """Run a single agent with the given task."""
+        """Run a single agent with the given task.
+
+        Prompt assembly order:
+        1. shared_context (from experiment config — all agents get this)
+        2. agent context (per-agent role/instructions)
+        3. agent private_context (hidden, e.g. adversarial objectives)
+        4. ## Environment (framework-injected: paths, agent ID)
+        5. ## Agents (framework-injected: peer list)
+        6. ## Task (the actual work)
+        """
         if self._sdk is None:
             raise RuntimeError("SDK not initialized")
 
         session_id = self._agent_sessions[agent.id]
         working_dir = self._session_working_directory()
 
-        # Build context-rich message
-        context = f"""## Environment
-Working directory: {working_dir}
-Your agent ID: {agent.id}
-Coordination directory: {self.experiment_dir / 'coordination'}
-Workspace directory: {self.experiment_dir / 'workspace'}
+        sections: list[str] = []
 
-"""
+        # 1. Shared context (all agents get the same text)
+        if self.config.shared_context:
+            sections.append(self.config.shared_context.strip())
+
+        # 2. Agent-specific context (role, instructions)
+        agent_context = agent.effective_context()
+        if agent_context:
+            sections.append(agent_context.strip())
+
+        # 3. Private context (hidden from other agents)
+        if agent.private_context:
+            sections.append(agent.private_context.strip())
+
+        # 4. Environment (framework-injected)
+        env_lines = [
+            "## Environment",
+            f"Working directory: {working_dir}",
+            f"Your agent ID: {agent.id}",
+        ]
         if self._benchmark_workdir is not None:
-            context += (
-                f"Benchmark repository directory: {self._benchmark_workdir}\n\n"
+            env_lines.append(
+                f"Repository: {self._benchmark_workdir}"
             )
-        # Prepend system prompt if provided
-        if agent.system_prompt:
-            context = f"{agent.system_prompt}\n\n---\n\n{context}"
+        sections.append("\n".join(env_lines))
 
-        # Auto-inject swarm context so agents always know their multi-agent situation
-        context += self._build_swarm_context(agent)
-
-        # Append backend-specific coordination instructions
-        if self._backend:
-            backend_instructions = self._backend.get_prompt_instructions(agent.id)
-            if backend_instructions:
-                context += f"\n## Coordination Backend Instructions\n{backend_instructions}\n\n"
-
-        message = f"{context}## Task\n{task}"
-
-        # Send the task (for DirectCLI, this spawns the subprocess)
-        await self._sdk.post_message(session_id, message)
-
-        # Start event stream (must happen after post_message for DirectCLI
-        # since the subprocess doesn't exist until the message is sent)
-        asyncio.create_task(self._stream_agent_events(agent.id, session_id))
-
-    def _build_swarm_context(self, agent: AgentConfig) -> str:
-        """Build swarm context block that tells the agent about its multi-agent situation.
-
-        Auto-injected by the framework so agents always know:
-        - How many agents are in the swarm
-        - Who their peers are and what roles they play
-        - What coordination mechanism is in use and how to use it
-        - Which topology they're operating in
-        """
-        from helm.config import CoordinationMechanism
-
-        topology = self.config.topology_label()
-        total = len(self.config.agents)
-        mechanism = self.config.coordination.mechanism
-
+        # 5. Agents (framework-injected peer list)
         peers: list[str] = []
         for a in self.config.agents:
             if a.id == agent.id:
                 continue
             role_label = a.role.value if a.role else "peer"
             peers.append(f"- {a.id} ({role_label})")
+        if peers:
+            sections.append("## Agents\n" + "\n".join(peers))
 
-        peer_list = "\n".join(peers) if peers else "- (none — you are the only agent)"
+        # 6. Task
+        sections.append(f"## Task\n{task}")
 
-        if total <= 1:
-            return f"""## Execution Context
-You are operating as a single agent.
-Topology: {topology}
-Coordination mechanism: {mechanism.value}
+        message = "\n\n".join(sections)
 
-Peer agents:
-{peer_list}
-
-"""
-
-        # Build mechanism-specific instructions
-        coord_instructions = self._build_coordination_instructions(
-            agent, mechanism
-        )
-
-        return f"""## Swarm Context
-You are part of a multi-agent system with {total} agent(s).
-Topology: {topology}
-Coordination mechanism: {mechanism.value}
-
-Your peers:
-{peer_list}
-
-{coord_instructions}
-"""
-
-    def _build_coordination_instructions(
-        self,
-        agent: AgentConfig,
-        mechanism: Any,
-    ) -> str:
-        """Generate coordination instructions based on the configured mechanism."""
-        from helm.config import CoordinationMechanism
-
-        agent_id = agent.id
-
-        if mechanism == CoordinationMechanism.MESSAGING:
-            return f"""## Coordination
-
-Coordinate through the agent-orchestrator tools. Do NOT write to `coordination/tasks/` or `coordination/status/`.
-
-- Use `send_message` to send messages to other agents
-- Use `check_inbox` to check for new messages
-- Use `list_agents` to see who is in the system
-- Use `signal_complete` to signal that all work is done
-"""
-
-        # Default: filesystem
-        return f"""## Coordination Protocol (filesystem)
-
-Coordinate through shared files in the `coordination/` directory.
-
-- Write task assignments to `coordination/tasks/<agent_id>.md`
-- Write completion reports to `coordination/status/<your_agent_id>_done.md`
-- Read other agents' status from `coordination/status/`
-- Write `coordination/signals/done` when the experiment is complete (coordinator only)
-"""
+        await self._sdk.post_message(session_id, message)
+        asyncio.create_task(self._stream_agent_events(agent.id, session_id))
 
     async def _stream_agent_events(self, agent_id: str, session_id: str) -> None:
         """Stream and process events from an agent."""

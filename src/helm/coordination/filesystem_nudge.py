@@ -113,10 +113,6 @@ class FilesystemNudgeBackend:
         self._known_files = self._scan_all_files()
         self._known_workspace_files = self._scan_workspace_files()
 
-    def get_prompt_instructions(self, agent_id: str) -> str:
-        """Do not inject framework-level coordination policy into agent prompts."""
-        return ""
-
     async def start_watching(
         self,
         sdk: SDKClient,

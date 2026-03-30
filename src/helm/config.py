@@ -42,9 +42,15 @@ class AgentConfig(BaseModel):
     harness: str = "claude-code"
     model: str | None = None  # Declared model identity for provenance (e.g. "claude-opus-4-6")
     role: AgentRole | None = None
-    system_prompt: str = ""
+    context: str = ""  # Agent-specific role and instructions
+    private_context: str = ""  # Hidden context only this agent sees (e.g. adversarial objectives)
+    system_prompt: str = ""  # Deprecated alias for context — use context instead
     disallowed_tools: list[str] = Field(default_factory=list)
     can_message: list[str] | None = None
+
+    def effective_context(self) -> str:
+        """Return the agent's context, falling back to system_prompt for backward compat."""
+        return self.context or self.system_prompt
 
 
 class OrchestratorRule(BaseModel):
@@ -373,6 +379,7 @@ class ExperimentConfig(BaseModel):
 
     name: str
     description: str = ""
+    shared_context: str = ""  # Identical text given to ALL agents
     agents: list[AgentConfig]
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
     coordination: CoordinationConfig = Field(default_factory=CoordinationConfig)

@@ -57,28 +57,6 @@ def test_coordination_message_to_dict_is_lossless() -> None:
     assert payload["delivery_status"] == "delivered"
 
 
-def test_get_prompt_instructions_does_not_inject_runtime_coordination_policy(tmp_path) -> None:
-    backend = FilesystemNudgeBackend()
-    config = {
-        "paths": {
-            "base": "coordination/",
-            "tasks": "coordination/tasks/",
-            "status": "coordination/status/",
-            "blocked": "coordination/blocked/",
-            "questions": "coordination/questions/",
-            "signals": "coordination/signals/",
-        },
-        "agent_roles": {
-            "coordinator": "hub",
-            "worker-a": "worker",
-        },
-        "hub_agent_id": "coordinator",
-    }
-
-    asyncio.run(backend.setup(tmp_path, ["coordinator", "worker-a"], config))
-    assert backend.get_prompt_instructions("worker-a") == ""
-
-
 class _FakeSDK:
     def __init__(self, *, supports_follow_up: bool = True) -> None:
         self.supports_follow_up = supports_follow_up

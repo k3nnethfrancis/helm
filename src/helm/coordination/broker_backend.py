@@ -138,24 +138,6 @@ class BrokerBackend:
         path = (self._experiment_dir / "mcp-configs" / f"{agent_id}.json").resolve()
         return str(path) if path.exists() else None
 
-    def get_prompt_instructions(self, agent_id: str) -> str:
-        """Return MCP-tool-based coordination instructions."""
-        delivery = self._config.get("delivery", "poll")
-        if delivery == "push":
-            return (
-                "## Coordination\n\n"
-                "Use the `send_message` tool to send messages to other agents.\n"
-                "Messages from other agents will appear in your conversation automatically.\n"
-                "You can also use `check_inbox` to explicitly check for new messages.\n"
-                "Use `list_agents` to see who else is in the system.\n"
-            )
-        return (
-            "## Coordination\n\n"
-            "Use the `send_message` tool to send messages to other agents.\n"
-            "Use `check_inbox` to check for new messages from other agents.\n"
-            "Use `list_agents` to see who else is in the system.\n"
-        )
-
     async def start_watching(
         self,
         sdk: SDKClient,
