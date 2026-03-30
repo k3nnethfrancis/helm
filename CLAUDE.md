@@ -242,6 +242,12 @@ python scripts/analyze_experiment_matrix.py experiments/benchmark-runs/<summary1
 5. Write system prompts for each role in `src/helm/topologies/prompts.py`
 6. Create a config YAML in `configs/` for the new topology
 
+## Hard Rules
+
+- **NEVER modify agent system prompts or experiment YAML configs without Kenneth's explicit review.** Prompts are experimental conditions. Changing them changes the experiment. Always show proposed prompt changes and get approval before writing them.
+- **NEVER modify judge rubrics** (`judges/*.md`) without review. Same reasoning — these are measurement instruments.
+- **Framework-injected coordination instructions** (in `experiment.py`, `broker_backend.py`) are plumbing, not experimental conditions — those can be fixed for bugs. But if a change would alter what agents see or how they behave, flag it.
+
 ## Design Principles
 
 1. **Config-driven, not opinionated** — The YAML config is the experiment definition. Helm executes faithfully. The researcher decides what to enforce vs leave to prompting.
