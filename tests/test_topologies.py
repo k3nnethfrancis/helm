@@ -349,34 +349,3 @@ class TestTopologiesReExports:
         assert callable(build_tool_instructions)
 
 
-class TestMatrixFamiliesShim:
-    """All public symbols importable from helm.matrix_families (backward compat)."""
-
-    def test_families_exports(self):
-        from helm.matrix_families import (
-            COORDINATION_FAMILY_LABELS,
-            FAMILY_LAYOUTS,
-            SUPPORTED_FAMILY_SIZES,
-            RoleSpec,
-            pattern_runtime_label,
-        )
-        assert COORDINATION_FAMILY_LABELS is not None
-        assert FAMILY_LAYOUTS is not None
-        assert SUPPORTED_FAMILY_SIZES is not None
-        assert RoleSpec is not None
-        assert callable(pattern_runtime_label)
-
-    def test_rules_exports(self):
-        from helm.matrix_families import TOPOLOGY_RULES, get_disallowed_tools
-        assert TOPOLOGY_RULES is not None
-        assert callable(get_disallowed_tools)
-
-    def test_builders_exports(self):
-        from helm.matrix_families import build_coordination, build_orchestrator
-        assert callable(build_coordination)
-        assert callable(build_orchestrator)
-
-    def test_prompts_exports(self):
-        from helm.matrix_families import build_prompt, build_tool_instructions
-        assert callable(build_prompt)
-        assert callable(build_tool_instructions)

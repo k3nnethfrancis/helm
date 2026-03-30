@@ -20,7 +20,7 @@ from helm.coordination.base import (
     MessageType,
     OnMessageCallback,
 )
-from helm.sdk import FollowUpMessageUnsupportedError, SDKClient
+from helm.adapters import FollowUpMessageUnsupportedError, SDKClient
 
 
 class FilesystemNudgeBackend:

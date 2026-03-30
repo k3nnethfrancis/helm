@@ -26,7 +26,7 @@ from helm.coordination.base import (
     OnMessageCallback,
 )
 from helm.coordination.broker import HelmBroker, Message
-from helm.sdk import SDKClient
+from helm.adapters import SDKClient
 
 logger = logging.getLogger(__name__)
 

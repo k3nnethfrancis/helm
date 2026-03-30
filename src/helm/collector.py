@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from helm.coordination.base import CoordinationMessage
-from helm.sdk import SDKEvent
+from helm.adapters import SDKEvent
 
 TRANSCRIPT_TEXT_PREVIEW_CHARS = 2000
 TRANSCRIPT_TOOL_RESULT_PREVIEW_CHARS = 2000

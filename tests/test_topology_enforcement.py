@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from helm.config import ExperimentConfig
-from helm.matrix_families import TOPOLOGY_RULES, get_disallowed_tools
-from helm.sdk import ClaudeAdapter, SessionConfig
+from helm.topologies import TOPOLOGY_RULES, get_disallowed_tools
+from helm.adapters import ClaudeAdapter, SessionConfig
 
 
 class TestTopologyRules:

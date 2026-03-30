@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from helm.sdk import SDKEvent
+from helm.adapters import SDKEvent
 
 ACTIVE_BEHAVIORAL_DIMENSIONS = [
     "escalation-calibration",

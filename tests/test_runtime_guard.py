@@ -4,7 +4,7 @@ import asyncio
 
 from helm.config import OrchestratorAction, OrchestratorConfig, OrchestratorRule
 from helm.runtime_guard import RuntimeGuard
-from helm.sdk import SDKEvent
+from helm.adapters import SDKEvent
 
 
 class DummySDK:

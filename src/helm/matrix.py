@@ -14,7 +14,7 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 
 from helm.config import ExperimentConfig
-from helm.matrix_families import (
+from helm.topologies import (
     COORDINATION_FAMILY_LABELS,
     FAMILY_LAYOUTS,
     SUPPORTED_FAMILY_SIZES,

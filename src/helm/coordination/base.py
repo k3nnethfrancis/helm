@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from helm.sdk import SDKClient
+from helm.adapters import SDKClient
 
 
 class MessageType(str, Enum):

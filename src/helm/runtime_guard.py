@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from helm.config import OrchestratorAction, OrchestratorConfig, OrchestratorRule
-from helm.sdk import FollowUpMessageUnsupportedError, SDKClient, SDKEvent
+from helm.adapters import FollowUpMessageUnsupportedError, SDKClient, SDKEvent
 
 
 @dataclass

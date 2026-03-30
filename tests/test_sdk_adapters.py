@@ -4,7 +4,7 @@ import asyncio
 import json
 import sqlite3
 
-from helm.sdk import (
+from helm.adapters import (
     DIRECTCLI_STREAM_READER_LIMIT,
     DirectCLIClient,
     FollowUpMessageUnsupportedError,

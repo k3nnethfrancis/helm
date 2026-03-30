@@ -29,7 +29,7 @@ from helm.config import AgentConfig, ExperimentConfig
 from helm.coordination import CoordinationBackend, CoordinationMessage, create_backend
 from helm.runtime_guard import RuntimeGuard
 from helm.run_data import save_run_data
-from helm.sdk import (
+from helm.adapters import (
     HeadlessCLIClient, SDKClient, SDKConfig, SDKEvent, SessionConfig,
     _HARNESS_ADAPTERS,
 )
