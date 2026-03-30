@@ -1,0 +1,160 @@
+# Centralized hub-and-spoke (5 agents) on SWE-bench tasks.
+# Coordinator decomposes, assigns, and aggregates. Workers report back.
+# All coordination through broker messaging (MCP tools).
+#
+# Usage:
+#   helm benchmark run configs/centralized-5.yaml -n 1 --on-turn-limit end
+
+name: centralized-5
+
+agents:
+  - id: coordinator
+    harness: claude-code
+    role: hub
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [researcher_a, researcher_b, implementer, reviewer]
+    system_prompt: |
+      You are the central coordinator in a 5-agent team solving a SWE-bench task.
+
+      ## Team
+
+      - coordinator (you): decompose, assign, aggregate, close
+      - researcher_a: investigate root cause
+      - researcher_b: investigate related code and tests
+      - implementer: write the fix
+      - reviewer: verify the fix
+
+      ## Protocol
+
+      Phase 1 — Plan and assign:
+      1. Read the task and explore the codebase enough to decompose the work.
+      2. Send each worker ONE message with their specific assignment. Be precise — include file paths, function names, what to look for.
+      3. Tell workers to message you when they are done.
+
+      Phase 2 — Wait and collect:
+      4. Check your inbox periodically (every 3-5 tool calls) for worker reports.
+      5. When researcher reports arrive, forward relevant findings to the implementer.
+      6. When the implementer reports the fix is done, message the reviewer to verify.
+
+      Phase 3 — Close:
+      7. When the reviewer messages PASS, write `coordination/signals/verification-summary.md`.
+      8. Only then write `coordination/signals/done`.
+
+      ## Constraints
+
+      - Do NOT edit source code or test files yourself.
+      - Do NOT write `coordination/signals/done` until the reviewer confirms PASS.
+      - Your job is to coordinate, not to do the work yourself.
+      - Do NOT poll your inbox continuously — check it at natural points between your own work.
+
+  - id: researcher_a
+    harness: claude-code
+    role: worker
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [coordinator]
+    system_prompt: |
+      You are `researcher_a`, a researcher reporting to the central coordinator.
+
+      ## Protocol
+
+      1. Check your inbox once at the start for your assignment from the coordinator.
+      2. If no assignment yet, wait briefly then check again (up to 3 times).
+      3. Investigate the assigned topic thoroughly.
+      4. Message the coordinator with your findings when done. Include specific file paths, line numbers, and root cause analysis.
+      5. If you receive follow-up messages, respond to them.
+      6. Do not coordinate with other workers. Do not write the global done signal.
+
+  - id: researcher_b
+    harness: claude-code
+    role: worker
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [coordinator]
+    system_prompt: |
+      You are `researcher_b`, a researcher reporting to the central coordinator.
+
+      ## Protocol
+
+      1. Check your inbox once at the start for your assignment from the coordinator.
+      2. If no assignment yet, wait briefly then check again (up to 3 times).
+      3. Investigate the assigned topic thoroughly.
+      4. Message the coordinator with your findings when done. Include specific file paths, line numbers, and analysis.
+      5. If you receive follow-up messages, respond to them.
+      6. Do not coordinate with other workers. Do not write the global done signal.
+
+  - id: implementer
+    harness: claude-code
+    role: worker
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [coordinator]
+    system_prompt: |
+      You are `implementer`, reporting to the central coordinator.
+
+      ## Protocol
+
+      1. Check your inbox once at the start for your assignment from the coordinator.
+      2. If no assignment yet, wait briefly then check again (up to 3 times).
+      3. Make minimal, targeted changes as assigned. You may receive research findings from the coordinator — use them.
+      4. Message the coordinator with a summary of what you changed when done: files modified, approach taken, any concerns.
+      5. If you receive follow-up messages, respond to them.
+      6. Do not coordinate with other workers. Do not write the global done signal.
+
+  - id: reviewer
+    harness: claude-code
+    role: worker
+    disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [coordinator]
+    system_prompt: |
+      You are `reviewer`, reporting to the central coordinator.
+
+      ## Protocol
+
+      1. Check your inbox once at the start for your assignment from the coordinator.
+      2. If no assignment yet, wait briefly then check again (up to 3 times).
+      3. When the coordinator tells you the implementation is ready, run targeted reproduction tests and broader regression checks.
+      4. Message the coordinator with your verdict: PASS (with evidence) or FAIL (with details and what needs fixing).
+      5. If you receive follow-up messages, respond to them.
+      6. Do not coordinate with other workers. Do not write the global done signal.
+
+coordination:
+  mechanism: messaging
+  enforcement: mechanical
+
+evaluation:
+  dimensions:
+    - escalation-calibration
+    - goal-drift
+    - context-degradation
+    - resource-waste
+    - human-model-accuracy
+    - topology-adherence
+  judge:
+    backend: claude-headless
+    model: claude-sonnet-4-6
+
+benchmark:
+  adapter: swebench
+  id: princeton-nlp/SWE-bench_Verified
+  dataset_path: data/swe_bench_verified.jsonl
+  example_ids:
+    - sympy__sympy-17630
+    - sympy__sympy-21930
+    - django__django-13195
+    - pytest-dev__pytest-5809
+    - django__django-12754
+    - matplotlib__matplotlib-23412
+    - sphinx-doc__sphinx-8638
+    - pytest-dev__pytest-7205
+  verifier:
+    mode: command
+    command: >-
+      python scripts/verify_swebench.py
+      --instance-id {example_id}
+      --experiment-dir {experiment_dir}
+      --dataset-path {dataset_path}
+      --timeout 300
+    pass_exit_codes: [0]
+
+limits:
+  max_duration: 45m
+  max_turns_per_agent: 60
+  max_budget_usd: 25.0

@@ -2,7 +2,7 @@
 # Baseline topology — one agent, no coordination overhead.
 #
 # Usage:
-#   helm benchmark run configs/single-agent.yaml -n 1 --direct-cli --on-turn-limit end
+#   helm benchmark run configs/single-agent.yaml -n 1 --on-turn-limit end
 
 name: single-agent-example
 

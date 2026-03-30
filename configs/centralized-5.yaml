@@ -1,102 +1,57 @@
-# Experiment 001: Centralized hub-and-spoke (5 agents)
-# 8 curated SWE-bench tasks with mechanical topology enforcement
+# Centralized hub-and-spoke (5 agents) — preset config.
+# Copy to your experiment directory and customize prompts/tasks.
 #
 # Usage:
-#   uv run helm benchmark run experiments/001_topology_enforcement_baseline/configs/centralized-5.yaml \
-#     -n 8 --direct-cli --on-turn-limit end \
-#     --experiments-dir experiments/001_topology_enforcement_baseline/runs
+#   helm benchmark run configs/centralized-5.yaml -n 1 --on-turn-limit end
 
-name: exp001-centralized-5
+name: centralized-5
 
 agents:
   - id: coordinator
     harness: claude-code
     role: hub
     disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [researcher_a, researcher_b, implementer, reviewer]
     system_prompt: |
-      You are the central coordinator in a centralized swarm solving a SWE-bench task.
-
-      ## Team
-
-      - coordinator (you): decompose, assign, aggregate, close
-      - researcher_a: investigate root cause
-      - researcher_b: investigate related code and tests
-      - implementer: write the fix
-      - reviewer: verify the fix
-
-      ## Instructions
-
-      1. Read the task, investigate the codebase, and decompose the work.
-      2. Send each worker a message with their specific assignment.
-      3. Check your inbox for worker reports. Workers will message you when they finish.
-      4. When the implementer reports the fix is done, message the reviewer to verify.
-      5. When the reviewer messages you with a PASS verdict, write `coordination/signals/verification-summary.md`.
-      6. Only then write `coordination/signals/done`.
-
-      ## Constraints
-
-      - Do NOT edit source code or test files. The implementer does that.
-      - Do NOT write `coordination/signals/done` until the reviewer confirms PASS.
-      - Your job is to coordinate, not to do the work yourself.
+      You are the central coordinator in a 5-agent team.
+      Decompose the task, assign work, collect results, close the run.
+      Do NOT edit code yourself. Do NOT close before the reviewer confirms PASS.
 
   - id: researcher_a
     harness: claude-code
     role: worker
     disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [coordinator]
     system_prompt: |
-      You are `researcher_a`, a researcher reporting to the central coordinator.
-
-      ## Instructions
-
-      1. Check your inbox for assignments from the coordinator. If none yet, poll every few seconds.
-      2. Investigate the assigned topic thoroughly.
-      3. Message the coordinator with your findings when done.
-      4. Do not coordinate laterally with other workers. Do not write the global done signal.
+      You are researcher_a. Check inbox for assignments, investigate, report findings to coordinator.
 
   - id: researcher_b
     harness: claude-code
     role: worker
     disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [coordinator]
     system_prompt: |
-      You are `researcher_b`, a researcher reporting to the central coordinator.
-
-      ## Instructions
-
-      1. Check your inbox for assignments from the coordinator. If none yet, poll every few seconds.
-      2. Investigate the assigned topic thoroughly.
-      3. Message the coordinator with your findings when done.
-      4. Do not coordinate laterally with other workers. Do not write the global done signal.
+      You are researcher_b. Check inbox for assignments, investigate, report findings to coordinator.
 
   - id: implementer
     harness: claude-code
     role: worker
     disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [coordinator]
     system_prompt: |
-      You are `implementer`, reporting to the central coordinator.
-
-      ## Instructions
-
-      1. Check your inbox for assignments from the coordinator. If none yet, poll every few seconds.
-      2. Make minimal, targeted changes in the workspace as assigned.
-      3. Message the coordinator with a summary of what you changed when done.
-      4. Do not coordinate laterally with other workers. Do not write the global done signal.
+      You are the implementer. Check inbox for assignments, make targeted changes, report to coordinator.
 
   - id: reviewer
     harness: claude-code
     role: worker
     disallowed_tools: [Agent, TeamCreate, SendMessage]
+    can_message: [coordinator]
     system_prompt: |
-      You are `reviewer`, reporting to the central coordinator.
-
-      ## Instructions
-
-      1. Check your inbox for assignments from the coordinator. If none yet, poll every few seconds.
-      2. Run targeted reproduction tests and broader regression checks as assigned.
-      3. Message the coordinator with your verdict: PASS (with evidence) or FAIL (with details).
-      4. Do not coordinate laterally with other workers. Do not write the global done signal.
+      You are the reviewer. Check inbox for review requests, test the changes, report PASS/FAIL to coordinator.
 
 coordination:
   mechanism: messaging
+  enforcement: mechanical
 
 evaluation:
   dimensions:
@@ -114,15 +69,6 @@ benchmark:
   adapter: swebench
   id: princeton-nlp/SWE-bench_Verified
   dataset_path: data/swe_bench_verified.jsonl
-  example_ids:
-    - sympy__sympy-17630
-    - sympy__sympy-21930
-    - django__django-13195
-    - pytest-dev__pytest-5809
-    - django__django-12754
-    - matplotlib__matplotlib-23412
-    - sphinx-doc__sphinx-8638
-    - pytest-dev__pytest-7205
   verifier:
     mode: command
     command: >-
