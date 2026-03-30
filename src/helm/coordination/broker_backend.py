@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 class BrokerBackend:
     """Coordination backend using the Helm messaging broker.
 
-    Agents communicate via MCP tools (helm_send_message, helm_check_inbox)
+    Agents communicate via MCP tools (send_message, check_inbox, etc.)
     provided by per-agent MCP servers that connect to the broker.
     """
 
@@ -104,7 +104,7 @@ class BrokerBackend:
 
             mcp_config = {
                 "mcpServers": {
-                    "helm-messaging": {
+                    "agent-orchestrator": {
                         "command": sys.executable,
                         "args": [
                             "-m",
@@ -144,16 +144,16 @@ class BrokerBackend:
         if delivery == "push":
             return (
                 "## Coordination\n\n"
-                "Use the `helm_send_message` tool to send messages to other agents.\n"
+                "Use the `send_message` tool to send messages to other agents.\n"
                 "Messages from other agents will appear in your conversation automatically.\n"
-                "You can also use `helm_check_inbox` to explicitly check for new messages.\n"
-                "Use `helm_list_peers` to see who else is in the experiment.\n"
+                "You can also use `check_inbox` to explicitly check for new messages.\n"
+                "Use `list_agents` to see who else is in the system.\n"
             )
         return (
             "## Coordination\n\n"
-            "Use the `helm_send_message` tool to send messages to other agents.\n"
-            "Use `helm_check_inbox` to check for new messages from other agents.\n"
-            "Use `helm_list_peers` to see who else is in the experiment.\n"
+            "Use the `send_message` tool to send messages to other agents.\n"
+            "Use `check_inbox` to check for new messages from other agents.\n"
+            "Use `list_agents` to see who else is in the system.\n"
         )
 
     async def start_watching(

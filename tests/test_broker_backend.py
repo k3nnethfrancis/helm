@@ -80,8 +80,8 @@ def test_broker_backend_uses_agent_policies_for_topology_and_capabilities(tmp_pa
         delegator_config = json.loads((tmp_path / "mcp-configs" / "delegator.json").read_text())
         worker_config = json.loads((tmp_path / "mcp-configs" / "worker_a.json").read_text())
 
-        delegator_env = delegator_config["mcpServers"]["helm-messaging"]["env"]
-        worker_env = worker_config["mcpServers"]["helm-messaging"]["env"]
+        delegator_env = delegator_config["mcpServers"]["agent-orchestrator"]["env"]
+        worker_env = worker_config["mcpServers"]["agent-orchestrator"]["env"]
 
         assert delegator_env["HELM_CAN_SIGNAL_DONE"] == "true"
         assert delegator_env["HELM_AGENT_ROLE"] == "hub"

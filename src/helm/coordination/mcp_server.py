@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
-"""Helm MCP server — per-agent messaging bridge.
+"""Agent orchestration MCP server — per-agent coordination tools.
 
-Stdio-based MCP server spawned by Claude Code via --mcp-config.
-One instance per agent. Connects to the Helm broker for message
-routing and provides native MCP tools for inter-agent communication.
+Stdio-based MCP server providing inter-agent messaging and coordination
+tools. One instance per agent. Routes messages through a coordination
+broker and provides tools for sending messages, checking for new
+messages, listing other agents, and signaling task completion.
 
 Config via environment variables:
     HELM_AGENT_ID       - This agent's ID
     HELM_BROKER_URL     - Broker HTTP URL (e.g. http://127.0.0.1:54321)
-    HELM_EXPERIMENT_DIR - Experiment directory path
+    HELM_EXPERIMENT_DIR - Working directory for coordination signals
     HELM_PEERS          - JSON list of peer agent IDs and roles
 
 Usage (from --mcp-config JSON):
     {
         "mcpServers": {
-            "helm-messaging": {
+            "agent-orchestrator": {
                 "command": "python",
                 "args": ["-m", "helm.coordination.mcp_server"],
                 "env": {
                     "HELM_AGENT_ID": "researcher_a",
                     "HELM_BROKER_URL": "http://127.0.0.1:54321",
-                    "HELM_EXPERIMENT_DIR": "/path/to/experiment",
+                    "HELM_EXPERIMENT_DIR": "/path/to/workdir",
                     "HELM_PEERS": "[{\\"id\\": \\"coordinator\\", \\"role\\": \\"hub\\"}]"
                 }
             }
@@ -45,7 +46,7 @@ EXPERIMENT_DIR = os.environ.get("HELM_EXPERIMENT_DIR", "")
 EXPERIMENT_ID = os.environ.get("HELM_EXPERIMENT_ID", "")
 PEERS_JSON = os.environ.get("HELM_PEERS", "[]")
 AGENT_ROLE = os.environ.get("HELM_AGENT_ROLE", "peer")
-# Per-agent capability flag (set by broker_backend based on topology/role)
+# Per-agent capability flag (controls tool visibility)
 CAN_SIGNAL_DONE = os.environ.get("HELM_CAN_SIGNAL_DONE", "true").lower() == "true"
 
 # Track last seen message ID for incremental polling
@@ -53,7 +54,7 @@ _last_seen_id = 0
 
 
 def _log(msg: str) -> None:
-    sys.stderr.write(f"[helm-mcp:{AGENT_ID}] {msg}\n")
+    sys.stderr.write(f"[orchestrator:{AGENT_ID}] {msg}\n")
     sys.stderr.flush()
 
 
@@ -131,16 +132,15 @@ def _current_peers() -> list[dict]:
     return _load_static_peers()
 
 
-# ── Tool handlers ──
+# ── Tool definitions ──
 
 TOOLS = [
     {
-        "name": "helm_send_message",
+        "name": "send_message",
         "description": (
-            "Send a message to another agent in the experiment. "
-            "Messages are delivered through the Helm coordination broker. "
-            "The broker enforces topology rules — you can only message "
-            "agents you are allowed to communicate with."
+            "Send a message to another agent. Messages are routed through "
+            "the coordination system. You can only message agents you are "
+            "permitted to communicate with."
         ),
         "inputSchema": {
             "type": "object",
@@ -158,10 +158,10 @@ TOOLS = [
         },
     },
     {
-        "name": "helm_check_inbox",
+        "name": "check_inbox",
         "description": (
-            "Check for new messages from other agents. "
-            "Returns only messages received since your last check."
+            "Check for new messages from other agents. Returns messages "
+            "received since your last check."
         ),
         "inputSchema": {
             "type": "object",
@@ -169,33 +169,34 @@ TOOLS = [
         },
     },
     {
-        "name": "helm_list_peers",
-        "description": (
-            "List the other agents in this experiment and their roles."
-        ),
+        "name": "list_agents",
+        "description": "List the other agents in this system and their roles.",
         "inputSchema": {
             "type": "object",
             "properties": {},
         },
     },
     {
-        "name": "helm_signal_done",
+        "name": "signal_complete",
         "description": (
-            "Signal that the experiment is complete. Writes a verification "
-            "summary and the done signal to end the experiment run."
+            "Signal that the work is complete. Provide a summary of what "
+            "was accomplished and the final status."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "summary": {
                     "type": "string",
-                    "description": "Verification summary text",
+                    "description": "Summary of work completed and final status",
                 },
             },
             "required": ["summary"],
         },
     },
 ]
+
+
+# ── Tool handlers ──
 
 
 def _handle_send_message(args: dict) -> dict:
@@ -218,7 +219,7 @@ def _handle_send_message(args: dict) -> dict:
     if result.get("error"):
         error_msg = result["error"]
         if result.get("topology_violation"):
-            error_msg = f"Topology violation: {error_msg}"
+            error_msg = f"Not permitted: {error_msg}"
         return {
             "content": [{"type": "text", "text": f"Error: {error_msg}"}],
             "isError": True,
@@ -272,15 +273,15 @@ def _handle_check_inbox(args: dict) -> dict:
     }
 
 
-def _handle_list_peers(args: dict) -> dict:
+def _handle_list_agents(args: dict) -> dict:
     peers = _current_peers()
 
     if not peers:
         return {
-            "content": [{"type": "text", "text": "No peers configured."}]
+            "content": [{"type": "text", "text": "No other agents found."}]
         }
 
-    lines = [f"You are: {AGENT_ID}\n", "Peers:"]
+    lines = [f"You are: {AGENT_ID}\n", "Other agents:"]
     for p in peers:
         pid = p.get("id", "?")
         role = p.get("role", "peer")
@@ -289,7 +290,7 @@ def _handle_list_peers(args: dict) -> dict:
     return {"content": [{"type": "text", "text": "\n".join(lines)}]}
 
 
-def _handle_signal_done(args: dict) -> dict:
+def _handle_signal_complete(args: dict) -> dict:
     summary = args.get("summary", "")
     if not summary:
         return {
@@ -304,7 +305,7 @@ def _handle_signal_done(args: dict) -> dict:
             "content": [
                 {
                     "type": "text",
-                    "text": "Error: HELM_EXPERIMENT_DIR not set.",
+                    "text": "Error: working directory not configured.",
                 }
             ],
             "isError": True,
@@ -313,26 +314,24 @@ def _handle_signal_done(args: dict) -> dict:
     signals_dir = Path(EXPERIMENT_DIR) / "coordination" / "signals"
     signals_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write verification summary
     (signals_dir / "verification-summary.md").write_text(summary)
-    # Write done signal
     (signals_dir / "done").write_text("done\n")
 
     return {
         "content": [
             {
                 "type": "text",
-                "text": "Experiment marked as complete. Verification summary written.",
+                "text": "Work marked as complete. Summary written.",
             }
         ]
     }
 
 
 TOOL_HANDLERS = {
-    "helm_send_message": _handle_send_message,
-    "helm_check_inbox": _handle_check_inbox,
-    "helm_list_peers": _handle_list_peers,
-    "helm_signal_done": _handle_signal_done,
+    "send_message": _handle_send_message,
+    "check_inbox": _handle_check_inbox,
+    "list_agents": _handle_list_agents,
+    "signal_complete": _handle_signal_complete,
 }
 
 
@@ -369,18 +368,22 @@ def main() -> None:
                         "tools": {},
                     },
                     "serverInfo": {
-                        "name": "helm-messaging",
-                        "version": "0.1.0",
+                        "name": "agent-orchestrator",
+                        "version": "0.2.0",
+                        "description": (
+                            "Coordination tools for multi-agent systems. "
+                            "Send and receive messages, list other agents, "
+                            "and signal task completion."
+                        ),
                     },
                 },
             })
         elif method == "notifications/initialized":
             pass  # Client ack
         elif method == "tools/list":
-            # Filter tools based on agent capabilities
             available = []
             for tool in TOOLS:
-                if tool["name"] == "helm_signal_done" and not CAN_SIGNAL_DONE:
+                if tool["name"] == "signal_complete" and not CAN_SIGNAL_DONE:
                     continue
                 available.append(tool)
             _write_jsonrpc({

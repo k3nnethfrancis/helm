@@ -618,14 +618,14 @@ Your peers:
         agent_id = agent.id
 
         if mechanism == CoordinationMechanism.MESSAGING:
-            return f"""## Coordination Protocol (messaging)
+            return f"""## Coordination
 
-Coordinate exclusively through the helm-messaging MCP tools. Do NOT write to `coordination/tasks/` or `coordination/status/`.
+Coordinate through the agent-orchestrator tools. Do NOT write to `coordination/tasks/` or `coordination/status/`.
 
-- Use `helm_send_message` to send messages to other agents
-- Use `helm_check_inbox` to check for new messages
-- Use `helm_list_peers` to see who is in the experiment
-- Use `helm_signal_done` to signal experiment completion (coordinator only)
+- Use `send_message` to send messages to other agents
+- Use `check_inbox` to check for new messages
+- Use `list_agents` to see who is in the system
+- Use `signal_complete` to signal that all work is done
 """
 
         # Default: filesystem

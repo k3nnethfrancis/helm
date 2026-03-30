@@ -40,17 +40,17 @@ Does broker-based messaging (MCP tools) improve multi-agent coordination compare
 
 ```bash
 # Centralized with messaging (8 tasks)
-helm benchmark run experiments/002_messaging_coordination/configs/centralized-5.yaml \
+helm benchmark run experiments/002_messaging_coordination/centralized-5.yaml \
   -n 8 --on-turn-limit end \
   --experiments-dir experiments/002_messaging_coordination/runs
 
 # Hybrid with filesystem (8 tasks)
-helm benchmark run experiments/002_messaging_coordination/configs/hybrid-5.yaml \
+helm benchmark run experiments/002_messaging_coordination/hybrid-5.yaml \
   -n 8 --on-turn-limit end \
   --experiments-dir experiments/002_messaging_coordination/runs
 
 # Delegating with native Agent tool (8 tasks)
-helm benchmark run experiments/002_messaging_coordination/configs/delegating-1.yaml \
+helm benchmark run experiments/002_messaging_coordination/delegating-1.yaml \
   -n 8 --on-turn-limit end \
   --experiments-dir experiments/002_messaging_coordination/runs
 ```
