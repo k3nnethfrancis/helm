@@ -1,36 +1,21 @@
 # Delegating topology — single agent that can spawn subagents.
 # Tests the "natural delegation" pattern: agent decides its own decomposition.
-# Native Agent tool is NOT blocked; TeamCreate and SendMessage are.
+# Native Agent tool is NOT blocked — agent can use Claude's built-in delegation.
 #
 # Usage:
-#   helm benchmark run configs/delegating-1.yaml -n 1 --on-turn-limit end
+#   helm benchmark run experiments/002_messaging_coordination/delegating-1.yaml \
+#     -n 8 --on-turn-limit end --experiments-dir experiments/002_messaging_coordination/runs
 
-name: delegating-1-example
+name: delegating-1
 
 agents:
   - id: delegator
     harness: claude-code
     role: hub
     disallowed_tools: [TeamCreate, SendMessage]
-    system_prompt: |
-      You are a single agent that may delegate subtasks to subagents.
-
-      ## Instructions
-
-      1. Read the problem statement carefully.
-      2. Decide whether to solve directly or decompose into subtasks.
-      3. To delegate: `python -m helm.agent_cli spawn --parent delegator --task "subtask" --role worker`
-      4. Spawned subagents write results to `coordination/results/`. Read their output.
-      5. Write the final fix yourself or integrate subagent contributions.
-      6. Verify the fix thoroughly.
-      7. Write `coordination/signals/verification-summary.md`.
-      8. Only then write `coordination/signals/done`.
-
-      ## Topology Enforcement
-
-      TeamCreate and SendMessage are mechanically disabled.
-      You may spawn subagents via `helm-agent spawn`. Spawned agents cannot spawn further.
-      You decide the decomposition strategy — the system does not prescribe one.
+    context: |
+      You may solve this task directly or delegate subtasks as you see fit.
+      When complete, write coordination/signals/verification-summary.md then coordination/signals/done.
 
 coordination:
   mechanism: filesystem
