@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from helm.coordination.base import CoordinationMessage, DeliveryStatus
 from helm.coordination.broker import BrokerState, HelmBroker, Message
 from helm.coordination.broker_backend import BrokerBackend
 
@@ -153,3 +154,89 @@ def test_broker_update_topology_endpoint_supports_parent_child_spawn() -> None:
     asyncio.run(_run())
 
 
+def test_broker_delivery_tracking_updates_coordination_messages() -> None:
+    """Delivery status on CoordinationMessage must update when recipient polls."""
+
+    async def _run() -> None:
+        backend = BrokerBackend()
+        captured: list[CoordinationMessage] = []
+        backend._on_message = lambda m: captured.append(m)
+
+        # Use a broker that routes callbacks through the backend
+        broker = HelmBroker(
+            on_message=backend._on_broker_message,
+            on_delivery=backend._on_broker_delivery,
+        )
+        port = await broker.start()
+        base_url = f"http://127.0.0.1:{port}"
+
+        try:
+            _post_json(f"{base_url}/register", {"agent_id": "a"})
+            _post_json(f"{base_url}/register", {"agent_id": "b"})
+
+            # Send — triggers _on_broker_message → captured
+            _post_json(
+                f"{base_url}/send",
+                {"from_id": "a", "to_id": "b", "content": "hello"},
+            )
+
+            assert len(captured) == 1
+            assert captured[0].delivered is False
+            assert captured[0].delivery_status == DeliveryStatus.NOT_ATTEMPTED
+
+            # Recipient polls — triggers _on_broker_delivery
+            result = _get_json(f"{base_url}/poll/b?after_id=0")
+            assert len(result["messages"]) == 1
+
+            # Delivery status updated on the same CoordinationMessage object
+            assert captured[0].delivered is True
+            assert captured[0].delivery_status == DeliveryStatus.DELIVERED
+            assert captured[0].delivery_timestamp is not None
+
+        finally:
+            await broker.stop()
+
+    asyncio.run(_run())
+
+
+def test_broker_delivery_callback_only_fires_for_new_deliveries() -> None:
+    """Polling same messages twice should not fire delivery callback again."""
+
+    delivery_counts: list[int] = []
+
+    def on_delivery(messages: list[Message]) -> None:
+        delivery_counts.append(len(messages))
+
+    async def _run() -> None:
+        broker = HelmBroker(on_delivery=on_delivery)
+        port = await broker.start()
+        base_url = f"http://127.0.0.1:{port}"
+
+        try:
+            _post_json(f"{base_url}/register", {"agent_id": "a"})
+            _post_json(f"{base_url}/register", {"agent_id": "b"})
+            _post_json(
+                f"{base_url}/send",
+                {"from_id": "a", "to_id": "b", "content": "msg1"},
+            )
+
+            # First poll — fires delivery callback
+            _get_json(f"{base_url}/poll/b?after_id=0")
+            assert delivery_counts == [1]
+
+            # Second poll — already delivered, no callback
+            _get_json(f"{base_url}/poll/b?after_id=0")
+            assert delivery_counts == [1]
+
+            # New message + poll — fires again
+            _post_json(
+                f"{base_url}/send",
+                {"from_id": "a", "to_id": "b", "content": "msg2"},
+            )
+            _get_json(f"{base_url}/poll/b?after_id=0")
+            assert delivery_counts == [1, 1]
+
+        finally:
+            await broker.stop()
+
+    asyncio.run(_run())

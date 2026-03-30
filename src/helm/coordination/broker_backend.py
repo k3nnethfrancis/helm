@@ -48,6 +48,8 @@ class BrokerBackend:
         self._poll_task: asyncio.Task | None = None
         self._running = False
         self._seen_message_ids: set[int] = set()
+        # Map broker message ID → CoordinationMessage for delivery tracking
+        self._coord_msg_by_broker_id: dict[int, CoordinationMessage] = {}
 
     async def setup(
         self,
@@ -80,7 +82,10 @@ class BrokerBackend:
 
         # Start broker
         enforcement = config.get("enforcement", "prompt-only")
-        self._broker = HelmBroker(on_message=self._on_broker_message)
+        self._broker = HelmBroker(
+            on_message=self._on_broker_message,
+            on_delivery=self._on_broker_delivery,
+        )
         self._broker.configure_topology(
             topology_rules,
             enforce=(enforcement == "mechanical"),
@@ -191,30 +196,40 @@ class BrokerBackend:
     # ── Internal ──
 
     def _on_broker_message(self, msg: Message) -> None:
-        """Forward broker messages to the transcript collector and push if available."""
+        """Forward broker messages to the transcript collector."""
         if msg.id in self._seen_message_ids:
             return
         self._seen_message_ids.add(msg.id)
 
+        coord_msg = CoordinationMessage(
+            timestamp=datetime.fromtimestamp(msg.timestamp),
+            sender=msg.from_id,
+            recipient=msg.to_id,
+            message_type=MessageType.PEER_MESSAGE,
+            content=msg.content,
+            channel_medium="broker",
+            channel_persistence="ephemeral",
+            channel_scope="targeted",
+            delivered=msg.delivered,
+            delivery_status=(
+                DeliveryStatus.DELIVERED
+                if msg.delivered
+                else DeliveryStatus.NOT_ATTEMPTED
+            ),
+            observed_via="broker",
+        )
+        self._coord_msg_by_broker_id[msg.id] = coord_msg
         if self._on_message:
-            coord_msg = CoordinationMessage(
-                timestamp=datetime.fromtimestamp(msg.timestamp),
-                sender=msg.from_id,
-                recipient=msg.to_id,
-                message_type=MessageType.PEER_MESSAGE,
-                content=msg.content,
-                channel_medium="broker",
-                channel_persistence="ephemeral",
-                channel_scope="targeted",
-                delivered=msg.delivered,
-                delivery_status=(
-                    DeliveryStatus.DELIVERED
-                    if msg.delivered
-                    else DeliveryStatus.NOT_ATTEMPTED
-                ),
-                observed_via="broker",
-            )
             self._on_message(coord_msg)
+
+    def _on_broker_delivery(self, messages: list[Message]) -> None:
+        """Update delivery status when recipient polls for messages."""
+        for msg in messages:
+            coord_msg = self._coord_msg_by_broker_id.get(msg.id)
+            if coord_msg is not None:
+                coord_msg.delivered = True
+                coord_msg.delivery_status = DeliveryStatus.DELIVERED
+                coord_msg.delivery_timestamp = datetime.now()
 
     async def _poll_signals(self) -> None:
         """Poll for filesystem signals (done, verification-summary)."""

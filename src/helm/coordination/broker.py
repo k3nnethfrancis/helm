@@ -109,9 +109,14 @@ class BrokerState:
 
 
 OnBrokerMessage = Callable[[Message], None]
+OnBrokerDelivery = Callable[[list[Message]], None]
 
 
-def _make_handler(state: BrokerState, on_message: OnBrokerMessage | None):
+def _make_handler(
+    state: BrokerState,
+    on_message: OnBrokerMessage | None,
+    on_delivery: OnBrokerDelivery | None = None,
+):
     """Create an HTTP request handler class with access to broker state."""
 
     class Handler(BaseHTTPRequestHandler):
@@ -153,8 +158,11 @@ def _make_handler(state: BrokerState, on_message: OnBrokerMessage | None):
                     if param.startswith("after_id="):
                         after_id = int(param.split("=", 1)[1])
                 messages = state.get_messages_for(agent_id, after_id)
+                newly_delivered = [m for m in messages if not m.delivered]
                 for m in messages:
                     m.delivered = True
+                if newly_delivered and on_delivery:
+                    on_delivery(newly_delivered)
                 self._json_response({
                     "messages": [
                         {
@@ -265,10 +273,13 @@ class HelmBroker:
     """
 
     def __init__(
-        self, on_message: OnBrokerMessage | None = None
+        self,
+        on_message: OnBrokerMessage | None = None,
+        on_delivery: OnBrokerDelivery | None = None,
     ):
         self._state = BrokerState()
         self._on_message = on_message
+        self._on_delivery = on_delivery
         self._server: HTTPServer | None = None
         self._thread: Thread | None = None
         self._port: int = 0
@@ -303,7 +314,7 @@ class HelmBroker:
         sock.close()
 
         handler_cls = _make_handler(
-            self._state, self._on_message
+            self._state, self._on_message, self._on_delivery
         )
         self._server = HTTPServer(
             ("127.0.0.1", self._port), handler_cls
