@@ -23,40 +23,50 @@ This breaks down into:
 
 ## Current Priority
 
-The current priority is **building real-time inter-agent messaging** so multi-agent experiments produce clean coordination data for the blog post.
+**Push delivery infrastructure is built and validated. Ready to re-run multi-agent experiments without polling waste.**
 
-### Where We Are (2026-03-28)
+### Where We Are (2026-03-29)
 
-**Experiment 001 is running. Single-agent baseline is complete. Multi-agent runs reveal coordination infrastructure gaps.**
+**Tmux-based push delivery works end-to-end. Coordinator can spawn agents dynamically. Per-agent capability controls are mechanical.**
 
-Key findings from the 2026-03-27 session:
+**What shipped this session (2026-03-28/29):**
 
-**Judge visibility bug found and fixed:**
-- Transcript renderer checked `type: "tool_call"` but Claude Code events use `type: "tool_use"` — all tool calls were invisible to the judge
-- All prior judge scores were based on agent narration alone, not actual tool execution
-- Fixed: full tool parameters rendered, per-tool-name breakdown in agent summaries
+**Tmux adapter for persistent interactive sessions:**
+- `TmuxCLIClient` manages persistent `claude` sessions in tmux panes
+- Messages injected via `tmux load-buffer` + `paste-buffer` (handles arbitrary content safely)
+- Automatically navigates the bypass-permissions TUI dialog
+- `ResumableCLIClient` also built as alternative using `claude -p --session-id UUID` + `--resume UUID` for sequential subprocess approach
+- Selected when `delivery: push` in experiment YAML config
 
-**Config-driven coordination mechanism:**
-- `CoordinationMechanism` enum: `filesystem` | `messaging`
-- Framework auto-injects mechanism-specific coordination instructions into agent prompts
-- Agent system prompts now focus on role/task constraints; plumbing comes from the framework
-- YAML `coordination.mechanism` field drives behavior — Helm is config-driven, not opinionated
+**`helm_spawn_agent` MCP tool:**
+- Coordinator can spawn new claude sessions in tmux at runtime
+- Spawned agents get messaging tools but CANNOT spawn further agents (no recursive spawning)
+- MCP config generated dynamically with per-agent env vars
 
-**Experiment 001 results so far:**
+**Per-agent capability controls (three layers):**
+1. **Mechanical (CLI)**: `--disallowedTools` blocks native Agent/TeamCreate/SendMessage
+2. **Capability (MCP)**: `HELM_CAN_SPAWN`, `HELM_CAN_SIGNAL_DONE` env vars — MCP server dynamically filters `tools/list` response so agents literally never see tools they can't use
+3. **Transport (broker)**: Topology rules on who can message whom, with optional mechanical enforcement
+
+**Integration test results (2026-03-29):**
+- 3 agents in tmux with MCP messaging: full hub-spoke coordination verified
+- Coordinator dispatched tasks to 2 workers, both completed and reported back (7 messages total)
+- Coordinator spawned a new agent via `helm_spawn_agent` → spawned agent sent "I am alive and ready" back
+- Worker tried to spawn → tool not visible (capability control works)
+
+**Experiment 001 results (from 2026-03-27/28):**
 - Single-agent baseline: 8/8 complete, 4/8 solved (50%), clean behavioral profiles
-- Centralized@5 v1 (old prompts): 8/8 run — coordinator systematically collapsed topology (edited code, wrote fake worker status, closed prematurely)
-- Centralized@5 v2 (tightened prompts, messaging-only): 8/8 run — coordinator follows rules but agents burn ~50% of turns polling empty inboxes. Coordination overhead kills performance.
-
-**The fundamental problem:** DirectCLI mode (`claude -p`) doesn't support pushing messages into running sessions. Agents must poll `helm-agent inbox` to check for messages. No push delivery = turn waste = coordination overhead exceeds parallelism benefit.
+- Centralized@5 v1 (old prompts): coordinator systematically collapsed topology
+- Centralized@5 v2 (messaging-only): coordinator follows rules but agents burn ~50% of turns polling
 
 **Design principle established:** Helm is a research instrument, not an opinionated framework. The YAML config declares experimental conditions (topology, communication channel, enforcement level, delivery mechanism). Helm executes faithfully. The researcher decides what to enforce mechanically vs leave to prompting.
 
 ### Immediate Next Steps
 
-1. **Build Helm native messaging with push delivery** — broker + channel push so agents receive messages in real-time without polling. This is the blocking infrastructure gap.
-2. **Re-run centralized@5** with push messaging and validate coordination actually works
-3. **Run remaining topologies** (hybrid@5, delegating@1) once messaging is stable
-4. **Blog post** — the narrative is clear: single-agent vs multi-agent, coordination overhead, what infrastructure is needed to make multi-agent worth it
+1. **Re-run centralized@5** with tmux adapter + push delivery — validate coordination works without polling waste
+2. **Run remaining topologies** (hybrid@5, delegating@1) with push delivery
+3. **Blog post** — single-agent vs multi-agent, coordination overhead, what infrastructure makes multi-agent worth it
+4. **Code review + cleanup** — simplify after rapid iteration
 
 ### Medium-Term
 
@@ -175,7 +185,7 @@ Topologies are mechanically enforced, not just prompt-steered:
 ```text
 helm/
 ├── src/helm/
-│   ├── adapters/            # Harness adapters (Claude, Codex, OpenCode) + DirectCLI client
+│   ├── adapters/            # Harness adapters (Claude, Codex, OpenCode) + DirectCLI/Tmux/Resumable clients
 │   ├── judge/               # Behavioral judge (backends, scoring, hierarchical strategy)
 │   ├── topologies/          # Topology families, enforcement rules, prompt templates
 │   ├── benchmarks/          # Benchmark adapters (SWE-bench), verification, export
@@ -262,14 +272,11 @@ python scripts/analyze_experiment_matrix.py experiments/benchmark-runs/<summary1
 
 ## Open Questions
 
-### Inter-Agent Messaging (Active, 2026-03-28)
-DirectCLI mode (`claude -p`) doesn't support push delivery — agents must poll for messages, wasting turns. The `notifications/claude/channel` MCP mechanism (proven by claude-peers) can push messages into running sessions. Need to build Helm-native messaging broker with push delivery. Key design questions:
-- Does channel push work in `claude -p` mode or only interactive?
-- Should the broker be an MCP server per agent, or a separate transport layer?
-- How to make this config-driven: `delivery: push | poll`, `enforcement: mechanical | prompt-only`
+### Inter-Agent Messaging (Resolved, 2026-03-29)
+**Resolved:** Push delivery works via tmux. `TmuxCLIClient` runs persistent interactive claude sessions; broker injects messages via `tmux paste-buffer`. `ResumableCLIClient` provides an alternative using `claude -p --resume UUID`. Both selected via `delivery: push` in config. Channel push via MCP notifications doesn't work in `claude -p` mode (v2.1.81) — tmux bypasses this entirely.
 
-### Coordination Channel as Experimental Variable (Active, 2026-03-28)
-Filesystem vs messaging vs both — these are experimental conditions, not design decisions. The config should declare the coordination channel and Helm sets it up. Early evidence: dual-channel (filesystem + messaging) creates ambiguity that agents exploit. Single-channel is cleaner.
+### Coordination Channel as Experimental Variable (Resolved, 2026-03-28)
+**Resolved:** Config-driven. `coordination.mechanism: filesystem | messaging`, `coordination.delivery: push | poll`, `coordination.enforcement: mechanical | prompt-only`. Single-channel cleaner than dual-channel per experiment 001 findings.
 
 ### Harness Control (Partially Resolved)
 Topology enforcement works mechanically via `--disallowedTools` (1.00 compliance). But **behavioral compliance** is a separate layer — coordinators follow tool restrictions while still collapsing structure (doing work themselves, writing fake status, closing prematurely). Prompt constraints help but aren't sufficient. The gap between structural compliance and behavioral compliance is itself a finding.

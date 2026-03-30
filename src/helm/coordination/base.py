@@ -128,6 +128,7 @@ class CoordinationBackend(Protocol):
         sdk: SDKClient,
         agent_sessions: dict[str, str],
         on_message: OnMessageCallback,
+        push_callback: Any = None,
     ) -> None:
         """Begin monitoring for coordination events and delivering nudges.
 
@@ -135,6 +136,8 @@ class CoordinationBackend(Protocol):
             sdk: The SDK client for sending nudge messages.
             agent_sessions: Mapping of agent_id -> session_id.
             on_message: Callback invoked for each coordination message observed.
+            push_callback: Optional async callback ``(agent_id, content) -> None``
+                for pushing messages into running agent sessions (tmux push delivery).
         """
         ...
 

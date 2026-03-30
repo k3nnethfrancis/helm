@@ -122,6 +122,7 @@ class FilesystemNudgeBackend:
         sdk: SDKClient,
         agent_sessions: dict[str, str],
         on_message: OnMessageCallback,
+        push_callback: Any = None,
     ) -> None:
         """Launch the async poll loop."""
         self._sdk = sdk

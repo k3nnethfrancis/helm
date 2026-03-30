@@ -15,6 +15,7 @@ from helm.adapters.codex import CodexAdapter
 from helm.adapters.direct_cli import DirectCLIClient, get_harness_adapter
 from helm.adapters.opencode import OpenCodeAdapter
 from helm.adapters.sdk_client import SDKClient, sdk_client
+from helm.adapters.tmux_cli import TmuxCLIClient
 
 _HARNESS_ADAPTERS: dict[str, type[HarnessAdapter]] = {
     "claude": ClaudeAdapter,
@@ -36,6 +37,7 @@ __all__ = [
     "SDKEvent",
     "SessionConfig",
     "_CLAUDE_SESSION_VARS",
+    "TmuxCLIClient",
     "_HARNESS_ADAPTERS",
     "get_harness_adapter",
     "sdk_client",

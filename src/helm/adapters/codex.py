@@ -27,8 +27,10 @@ class CodexAdapter(HarnessAdapter):
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "-c", 'model_reasoning_effort="high"',
-            message,
         ]
+        if config.model:
+            cmd.extend(["-m", config.model])
+        cmd.append(message)
         if config.cwd:
             cmd.extend(["-C", config.cwd])
         if config.disallowed_tools:

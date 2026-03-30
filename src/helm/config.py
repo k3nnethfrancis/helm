@@ -44,6 +44,7 @@ class AgentConfig(BaseModel):
     role: AgentRole | None = None
     system_prompt: str = ""
     disallowed_tools: list[str] = Field(default_factory=list)
+    can_message: list[str] | None = None
 
 
 class OrchestratorRule(BaseModel):

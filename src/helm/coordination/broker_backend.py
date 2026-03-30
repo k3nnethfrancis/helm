@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,8 @@ from helm.coordination.base import (
 )
 from helm.coordination.broker import HelmBroker, Message
 from helm.sdk import SDKClient
+
+logger = logging.getLogger(__name__)
 
 
 class BrokerBackend:
@@ -42,6 +45,9 @@ class BrokerBackend:
         self._agents: list[str] = []
         self._config: dict[str, Any] = {}
         self._on_message: OnMessageCallback | None = None
+        self._push_callback: Any = None
+        self._agent_sessions: dict[str, str] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._poll_task: asyncio.Task | None = None
         self._running = False
         self._seen_message_ids: set[int] = set()
@@ -62,15 +68,18 @@ class BrokerBackend:
         (coord_dir / "signals").mkdir(parents=True, exist_ok=True)
         (coord_dir / "messages").mkdir(parents=True, exist_ok=True)
 
-        # Build topology rules from agent config
-        agent_configs = config.get("agent_roles", {})
+        # Build topology rules and capabilities from the experiment-owned policy.
+        agent_policies = config.get("agent_policies", {})
         topology_rules: dict[str, list[str]] = {}
-        raw_agents = config.get("_raw_agents", {})
         for aid in agents:
-            if isinstance(raw_agents, dict) and aid in raw_agents:
-                can_message = raw_agents[aid].get("can_message", [])
-                if can_message:
-                    topology_rules[aid] = can_message
+            policy = agent_policies.get(aid, {})
+            can_message = policy.get("can_message", [])
+            if isinstance(can_message, list):
+                topology_rules[aid] = [
+                    recipient
+                    for recipient in can_message
+                    if isinstance(recipient, str) and recipient
+                ]
 
         # Start broker
         enforcement = config.get("enforcement", "prompt-only")
@@ -81,19 +90,17 @@ class BrokerBackend:
         )
         port = await self._broker.start()
 
-        # Write .helm-config.json (for backward compat with agent_cli)
-        helm_config = self._build_helm_config(config, agents)
-        (coord_dir / ".helm-config.json").write_text(
-            json.dumps(helm_config, indent=2)
-        )
-
         # Generate per-agent MCP config files
         mcp_dir = self._experiment_dir / "mcp-configs"
         mcp_dir.mkdir(parents=True, exist_ok=True)
 
-        peers_by_agent = self._build_peers_map(config, agents)
+        peers_by_agent = self._build_peers_map(agent_policies)
 
         for agent_id in agents:
+            policy = agent_policies.get(agent_id, {})
+            can_spawn = bool(policy.get("can_spawn"))
+            can_signal_done = bool(policy.get("can_signal_done"))
+
             mcp_config = {
                 "mcpServers": {
                     "helm-messaging": {
@@ -111,9 +118,12 @@ class BrokerBackend:
                             "HELM_EXPERIMENT_ID": config.get(
                                 "experiment_id", ""
                             ),
+                            "HELM_AGENT_ROLE": policy.get("role", "peer"),
                             "HELM_PEERS": json.dumps(
                                 peers_by_agent.get(agent_id, [])
                             ),
+                            "HELM_CAN_SPAWN": str(can_spawn).lower(),
+                            "HELM_CAN_SIGNAL_DONE": str(can_signal_done).lower(),
                         },
                     }
                 }
@@ -152,9 +162,17 @@ class BrokerBackend:
         sdk: SDKClient,
         agent_sessions: dict[str, str],
         on_message: OnMessageCallback,
+        push_callback: Any = None,
     ) -> None:
-        """Start monitoring broker for transcript capture."""
+        """Start monitoring broker for transcript capture.
+
+        If ``push_callback`` is provided, broker messages are pushed
+        into recipient agent sessions (tmux push delivery).
+        """
         self._on_message = on_message
+        self._push_callback = push_callback
+        self._agent_sessions = agent_sessions
+        self._loop = asyncio.get_running_loop()
         self._running = True
         # Also monitor filesystem for signals/done (backward compat)
         self._poll_task = asyncio.create_task(self._poll_signals())
@@ -162,6 +180,7 @@ class BrokerBackend:
     async def stop_watching(self) -> None:
         """Stop monitoring."""
         self._running = False
+        self._loop = None
         if self._poll_task and not self._poll_task.done():
             self._poll_task.cancel()
             try:
@@ -186,10 +205,29 @@ class BrokerBackend:
     # ── Internal ──
 
     def _on_broker_message(self, msg: Message) -> None:
-        """Forward broker messages to the transcript collector."""
+        """Forward broker messages to the transcript collector and push if available."""
         if msg.id in self._seen_message_ids:
             return
         self._seen_message_ids.add(msg.id)
+
+        # Push delivery: inject message into recipient's running session
+        if (
+            self._push_callback
+            and self._loop is not None
+            and msg.to_id in self._agent_sessions
+        ):
+            formatted = f"[Message from {msg.from_id}]:\n{msg.content}"
+            try:
+                self._loop.call_soon_threadsafe(
+                    self._schedule_push_message,
+                    msg.to_id,
+                    formatted,
+                )
+                msg.delivered = True
+            except Exception:
+                logger.warning(
+                    "Failed to push message to %s", msg.to_id, exc_info=True
+                )
 
         if self._on_message:
             coord_msg = CoordinationMessage(
@@ -248,54 +286,39 @@ class BrokerBackend:
 
             await asyncio.sleep(self._poll_interval)
 
-    def _build_helm_config(
-        self,
-        config: dict[str, Any],
-        agents: list[str],
-    ) -> dict[str, Any]:
-        """Build .helm-config.json for backward compatibility."""
-        agent_roles = config.get("agent_roles", {})
-        hub_id = config.get("hub_agent_id")
-
-        agent_defs: dict[str, Any] = {}
-        for aid in agents:
-            role = agent_roles.get(aid, "peer")
-            can_message: list[str] = []
-            # Hub can message all workers, workers can message hub
-            if hub_id:
-                if aid == hub_id:
-                    can_message = [a for a in agents if a != aid]
-                else:
-                    can_message = [hub_id]
-            agent_defs[aid] = {
-                "role": role,
-                "can_spawn": False,
-                "can_message": can_message,
-            }
-
-        return {
-            "family": config.get("coordination_family", "unknown"),
-            "experiment_id": config.get("experiment_id", ""),
-            "harness": "claude-code",
-            "agents": agent_defs,
-        }
-
     def _build_peers_map(
         self,
-        config: dict[str, Any],
-        agents: list[str],
+        agent_policies: dict[str, dict[str, Any]],
     ) -> dict[str, list[dict[str, str]]]:
-        """Build per-agent peer lists for MCP server config."""
-        agent_roles = config.get("agent_roles", {})
+        """Build per-agent peer lists from the canonical policy."""
         peers_map: dict[str, list[dict[str, str]]] = {}
-        for aid in agents:
+        for aid, policy in agent_policies.items():
             peers = []
-            for other in agents:
-                if other == aid:
+            for other in policy.get("can_message", []):
+                if other == aid or other not in agent_policies:
                     continue
                 peers.append({
                     "id": other,
-                    "role": agent_roles.get(other, "peer"),
+                    "role": agent_policies[other].get("role", "peer"),
                 })
             peers_map[aid] = peers
         return peers_map
+
+    def _schedule_push_message(self, agent_id: str, content: str) -> None:
+        """Schedule a push callback on the experiment event loop."""
+        if self._loop is None or self._push_callback is None:
+            return
+
+        task = self._loop.create_task(self._push_callback(agent_id, content))
+        task.add_done_callback(
+            lambda finished: self._log_push_failure(agent_id, finished)
+        )
+
+    def _log_push_failure(
+        self, agent_id: str, task: asyncio.Task[Any]
+    ) -> None:
+        """Log asynchronous push callback failures."""
+        try:
+            task.result()
+        except Exception:
+            logger.warning("Failed to push message to %s", agent_id, exc_info=True)

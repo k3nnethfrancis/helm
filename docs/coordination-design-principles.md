@@ -205,9 +205,13 @@ From Experiment 001 (2026-03-27/28):
 - **Polling-based messaging wastes turns.** Without push delivery, agents burn 30-50% of turns checking empty inboxes.
 
 ### What's not yet implemented
-- **Push delivery** (`delivery: push`): MCP channel notifications (`notifications/claude/channel`) don't work in `claude -p` mode with current Claude Code version (v2.1.81). Deferred until the flag is available.
 - **Filesystem write permissions per agent**: Would prevent coordinator from writing to worker status directories.
 - **Message authentication/signing**: Inter-agent messages are plaintext — no integrity checking.
+
+### Recently implemented (2026-03-29)
+- **Push delivery** (`delivery: push`): Implemented via `TmuxCLIClient` — persistent interactive claude sessions in tmux panes, messages injected via `tmux paste-buffer`. Alternative: `ResumableCLIClient` using `claude -p --resume UUID`. MCP channel notifications still don't work in `claude -p` mode, but tmux bypasses this entirely.
+- **Agent spawn via MCP** (`helm_spawn_agent`): Coordinator can dynamically spawn new claude sessions in tmux. Spawned agents get messaging but not spawn capability.
+- **Per-agent capability controls**: `HELM_CAN_SPAWN`, `HELM_CAN_SIGNAL_DONE` env vars. MCP server dynamically filters tool list — agents never see tools they can't use.
 
 ## Design Implications (unchanged)
 

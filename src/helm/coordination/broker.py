@@ -69,9 +69,9 @@ class BrokerState:
         """Check topology rules. Returns (allowed, reason)."""
         if not self.enforce_topology:
             return True, ""
-        allowed = self.topology_rules.get(from_id, [])
-        if not allowed:
-            return True, ""
+        allowed = self.topology_rules.get(from_id)
+        if allowed is None:
+            return False, f"No topology rules registered for {from_id}"
         if to_id in allowed:
             return True, ""
         return (
@@ -79,6 +79,33 @@ class BrokerState:
             f"Topology violation: {from_id} cannot message {to_id}. "
             f"Allowed: {allowed}",
         )
+
+    def update_topology_rule(
+        self, agent_id: str, allowed_recipients: list[str]
+    ) -> None:
+        """Replace one sender's allowed-recipient list."""
+        self.topology_rules[agent_id] = list(allowed_recipients)
+
+    def peers_for(self, agent_id: str) -> list[dict[str, Any]]:
+        """Return the peer view for an agent."""
+        if self.enforce_topology:
+            peer_ids = self.topology_rules.get(agent_id, [])
+        else:
+            peer_ids = [
+                other_id for other_id in self.agents
+                if other_id != agent_id
+            ]
+
+        peers: list[dict[str, Any]] = []
+        for peer_id in peer_ids:
+            peer = self.agents.get(peer_id, {})
+            peers.append(
+                {
+                    "id": peer_id,
+                    "role": peer.get("role", "peer"),
+                }
+            )
+        return peers
 
 
 OnBrokerMessage = Callable[[Message], None]
@@ -143,6 +170,9 @@ def _make_handler(state: BrokerState, on_message: OnBrokerMessage | None):
                 self._json_response({
                     "agents": list(state.agents.values())
                 })
+            elif path.startswith("/peers/"):
+                agent_id = path.split("/peers/", 1)[1]
+                self._json_response({"peers": state.peers_for(agent_id)})
             else:
                 self._json_response(
                     {"error": "Not found"}, status=404
@@ -164,6 +194,7 @@ def _make_handler(state: BrokerState, on_message: OnBrokerMessage | None):
                     "experiment_id": body.get(
                         "experiment_id", ""
                     ),
+                    "role": body.get("role", "peer"),
                     "registered_at": time.time(),
                 }
                 self._json_response(
@@ -197,6 +228,26 @@ def _make_handler(state: BrokerState, on_message: OnBrokerMessage | None):
                     on_message(msg)
                 self._json_response(
                     {"ok": True, "message_id": msg.id}
+                )
+            elif path == "/update_topology":
+                agent_id = body.get("agent_id", "")
+                allowed = body.get("allowed_recipients")
+                if not agent_id or not isinstance(allowed, list):
+                    self._json_response(
+                        {
+                            "error": "agent_id and allowed_recipients list required"
+                        },
+                        status=400,
+                    )
+                    return
+                normalized = [
+                    recipient
+                    for recipient in allowed
+                    if isinstance(recipient, str) and recipient
+                ]
+                state.update_topology_rule(agent_id, normalized)
+                self._json_response(
+                    {"ok": True, "agent_id": agent_id, "allowed_recipients": normalized}
                 )
 
             else:

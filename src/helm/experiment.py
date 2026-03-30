@@ -33,6 +33,7 @@ from helm.sdk import (
     DirectCLIClient, SDKClient, SDKConfig, SDKEvent, SessionConfig,
     _HARNESS_ADAPTERS,
 )
+from helm.topologies import COORDINATION_FAMILY_LABELS
 
 
 @dataclass
@@ -87,7 +88,8 @@ class Experiment:
         self.experiment_id = f"{config.name}-{uuid.uuid4().hex[:8]}"
         self.experiment_dir = experiments_dir / self.experiment_id
 
-        self._sdk: SDKClient | DirectCLIClient | None = None
+        # SDK client: SDKClient, DirectCLIClient, or TmuxCLIClient
+        self._sdk: Any = None
         self._backend: CoordinationBackend | None = None
         self._orchestrator: RuntimeGuard | None = None
         self._collector: EventCollector | None = None
@@ -149,6 +151,14 @@ class Experiment:
         # Pass through as-is and let SDK validate/accept it.
         return normalized
 
+    def _should_use_push_delivery(self) -> bool:
+        """Use follow-up message injection when coordination delivery is ``push``.
+
+        Tmux sessions provide a pseudo-TTY so interactive claude can
+        accept follow-up messages injected via ``tmux paste-buffer``.
+        """
+        return self.config.coordination.delivery == "push"
+
     def _should_use_direct_cli(self) -> bool:
         """Decide whether to use DirectCLIClient instead of the SDK daemon.
 
@@ -194,21 +204,19 @@ class Experiment:
         hub = self.config.get_hub_agent()
         coord_backend_config["hub_agent_id"] = hub.id if hub else None
         coord_backend_config["experiment_id"] = self.experiment_id
-        # Pass raw agent configs so broker can build topology rules
-        coord_backend_config["_raw_agents"] = {
-            a.id: {
-                "role": a.role.value if a.role else "peer",
-                "can_message": a.can_message if hasattr(a, "can_message") else [],
-            }
-            for a in self.config.agents
-        }
+        coord_backend_config["architecture_family"] = self._architecture_family()
+        coord_backend_config["coordination_family"] = self._coordination_family_label()
+        coord_backend_config["agent_policies"] = self._build_agent_policies()
         await self._backend.setup(self.experiment_dir, agent_ids, coord_backend_config)
 
         # Write topology enforcement config for helm-agent CLI
         self._write_helm_config()
 
         # Select agent backend
-        if self._should_use_direct_cli():
+        if self._should_use_push_delivery():
+            from helm.adapters.tmux_cli import TmuxCLIClient
+            self._sdk = TmuxCLIClient()
+        elif self._should_use_direct_cli():
             self._sdk = DirectCLIClient()
         else:
             sdk_config = SDKConfig(binary_path=self.sdk_binary_path)
@@ -265,6 +273,7 @@ class Experiment:
         session_config = SessionConfig(
             agent=session_agent,
             permission_mode="bypass",
+            model=agent.model,
             cwd=str(self._session_working_directory()),
             disallowed_tools=agent.disallowed_tools,
             mcp_config_path=mcp_path,
@@ -348,44 +357,69 @@ class Experiment:
         benchmark.example_metadata = metadata
         return metadata
 
+    def _architecture_family(self) -> str:
+        """Infer the architecture family for policy/config generation."""
+        matrix = self.config.metadata.matrix
+        if matrix and matrix.architecture_family:
+            return matrix.architecture_family
+
+        normalized = self.config.name.lower()
+        for family in (
+            "single",
+            "independent",
+            "centralized",
+            "decentralized",
+            "hybrid",
+            "delegating",
+        ):
+            if family in normalized:
+                return family
+        return "unknown"
+
+    def _coordination_family_label(self) -> str:
+        """Return the coordination-family label used in metadata exports."""
+        matrix = self.config.metadata.matrix
+        if matrix and matrix.coordination_family:
+            return matrix.coordination_family
+
+        family = self._architecture_family()
+        return COORDINATION_FAMILY_LABELS.get(family, "unknown")
+
+    def _build_agent_policies(self) -> dict[str, dict[str, Any]]:
+        """Build the canonical per-agent coordination policy for this run."""
+        family = self._architecture_family()
+        hub = self.config.get_hub_agent()
+        hub_id = hub.id if hub else None
+        agent_ids = [agent.id for agent in self.config.agents]
+        worker_ids = [agent_id for agent_id in agent_ids if agent_id != hub_id]
+
+        policies: dict[str, dict[str, Any]] = {}
+        for agent in self.config.agents:
+            role = agent.role.value if agent.role else "peer"
+            if agent.can_message is not None:
+                can_message = list(agent.can_message)
+            elif family in ("centralized", "independent", "delegating") and hub_id:
+                can_message = worker_ids if agent.id == hub_id else [hub_id]
+            elif family in ("decentralized", "hybrid"):
+                can_message = [peer_id for peer_id in agent_ids if peer_id != agent.id]
+            else:
+                can_message = []
+
+            policies[agent.id] = {
+                "role": role,
+                "can_spawn": family == "delegating" and agent.id == hub_id,
+                "can_signal_done": agent.id == hub_id or hub_id is None,
+                "can_message": can_message,
+            }
+
+        return policies
+
     def _write_helm_config(self) -> None:
         """Write .helm-config.json for the helm-agent CLI to read."""
         coord_dir = self.experiment_dir / "coordination"
         coord_dir.mkdir(parents=True, exist_ok=True)
-
-        # Determine family from matrix metadata or pattern name
-        family = "unknown"
-        if self.config.metadata and self.config.metadata.matrix:
-            family = self.config.metadata.matrix.architecture_family
-        elif self.config.name:
-            for f in ("single", "centralized", "decentralized", "hybrid", "independent", "delegating"):
-                if f in self.config.name:
-                    family = f
-                    break
-
-        hub = self.config.get_hub_agent()
-        hub_id = hub.id if hub else None
-        worker_ids = [a.id for a in self.config.agents if a.id != hub_id]
-
-        agents_config: dict = {}
-        for agent in self.config.agents:
-            role = agent.role.value if agent.role else "peer"
-            can_spawn = "Agent" not in agent.disallowed_tools
-            # Build messaging rules based on topology
-            if family == "centralized" and role == "worker":
-                can_message = [hub_id] if hub_id else []
-            elif family == "centralized" and role == "hub":
-                can_message = worker_ids
-            elif family in ("decentralized", "hybrid"):
-                can_message = [a.id for a in self.config.agents if a.id != agent.id]
-            else:
-                can_message = []
-
-            agents_config[agent.id] = {
-                "role": role,
-                "can_spawn": can_spawn,
-                "can_message": can_message,
-            }
+        family = self._architecture_family()
+        agents_config = self._build_agent_policies()
 
         config_data = {
             "family": family,
@@ -441,10 +475,14 @@ class Experiment:
 
             # Start coordination backend watcher
             if self._backend and self._sdk:
+                push_cb = (
+                    self._push_to_agent if self._should_use_push_delivery() else None
+                )
                 await self._backend.start_watching(
                     self._sdk,
                     self._agent_sessions,
                     on_message=self._record_coordination_message,
+                    push_callback=push_cb,
                 )
 
             # Wait for completion
@@ -719,6 +757,12 @@ Coordinate through shared files in the `coordination/` directory.
         """Route a coordination message from the backend to the collector."""
         if self._collector:
             self._collector.record_coordination(message)
+
+    async def _push_to_agent(self, agent_id: str, content: str) -> None:
+        """Push a message into a running agent session (tmux only)."""
+        session_id = self._agent_sessions.get(agent_id)
+        if session_id and self._sdk:
+            await self._sdk.post_message(session_id, content)
 
     def _all_agents_done(self) -> bool:
         """Check if all agents have signaled done via the coordination backend."""

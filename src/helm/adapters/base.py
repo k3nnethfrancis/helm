@@ -27,6 +27,7 @@ class SessionConfig:
     allowed_commands: list[str] | None = None
     cwd: str | None = None
     session_marker: str | None = None
+    model: str | None = None
     disallowed_tools: list[str] = field(default_factory=list)
     mcp_config_path: str | None = None
 
