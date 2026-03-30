@@ -23,33 +23,37 @@ This breaks down into:
 
 ## Current Priority
 
-**Push delivery infrastructure is built and validated. Ready to re-run multi-agent experiments without polling waste.**
+**Running experiment 002: multi-agent coordination with minimal prompts, no turn limits, clean MCP tooling.**
 
 ### Where We Are (2026-03-29)
 
-**Tmux-based push delivery works end-to-end. Coordinator can spawn agents dynamically. Per-agent capability controls are mechanical.**
-
-**Architecture simplified (2026-03-29):**
-- **Headless-only runtime.** Removed TmuxCLIClient, ResumableCLIClient, helm_spawn_agent. One client: `HeadlessCLIClient` (renamed from DirectCLIClient). Full NDJSON traceability on every run.
-- **Messaging broker + MCP tools** for inter-agent coordination. Agents call `helm_check_inbox` as a traced tool call — fully observable, no hidden side channels.
-- **Per-agent capability controls**: `HELM_CAN_SIGNAL_DONE` env var. MCP server filters tool list so agents only see tools they're allowed to use.
+**Architecture:**
+- **Headless-only runtime.** `HeadlessCLIClient` — one `claude -p` per agent, full NDJSON traceability.
+- **Agent-orchestrator MCP server** — agents see `send_message`, `check_inbox`, `list_agents`, `signal_complete`. Generic names, no experiment/framework language. Self-documenting tool descriptions.
+- **Prompt framework** — `shared_context` (all agents), `context` (per-agent), `private_context` (hidden, adversarial). Framework injects only `## Environment` and `## Agents`. No framework-injected coordination instructions — MCP tools are self-documenting.
 - **Topology enforcement**: Mechanical (`--disallowedTools` + broker rules) or prompt-only — configurable per experiment.
-- Tmux/push delivery infrastructure preserved at commit `2174267` for rollback if needed.
+- **Delivery tracking**: Broker fires `on_delivery` callback when messages are polled — `CoordinationMessage` objects update in-place.
 
-**Experiment 001 results (from 2026-03-27/28):**
-- Single-agent baseline: 8/8 complete, 4/8 solved (50%), clean behavioral profiles
-- Centralized@5 v1 (old prompts): coordinator systematically collapsed topology
-- Centralized@5 v2 (messaging-only): coordinator follows rules but agents burn ~50% of turns polling
-- Key finding: structural compliance ≠ behavioral compliance. The gap is research data.
+**Experiment 002 (in progress):**
+- Centralized-5 (messaging, mechanical enforcement): smoke test running
+- Hybrid-5 (filesystem): ready to launch
+- Delegating-1 (native Agent tool): ready to launch
+- All configs: minimal prompts, no turn limits, 60min timeout
+- Same 8 SWE-bench tasks as experiment 001 for fair comparison
 
-**Design principle established:** Helm is a research instrument, not an opinionated framework. The YAML config declares experimental conditions. Helm executes faithfully. The researcher decides what to enforce mechanically vs leave to prompting. See `notes/shoshin-codex/projects/helm/principles.md`.
+**Experiment 001 findings (baseline):**
+- Single-agent: 8/8 complete, 4/8 solved (50%)
+- Centralized@5 v1: coordinator collapsed topology
+- Centralized@5 v2: 30-50% polling waste, no done signal
+- Key finding: structural compliance ≠ behavioral compliance
 
 ### Immediate Next Steps
 
-1. **Re-run centralized@5** with improved prompting (plan-then-execute, not continuous polling)
-2. **Run hybrid@5 and delegating@1** topologies
-3. **Blog post** — single-agent vs multi-agent, coordination overhead
-4. **Adversarial experiment** — hidden-objective agent in hub-spoke topology
+1. **Monitor experiment 002 smoke test** — verify prompt framework works end-to-end
+2. **Launch all 3 conditions × 8 tasks** once smoke test passes
+3. **Review traces** — compare with experiment 001 data
+4. **Adversarial experiment** — use `private_context` for hidden-objective agent (rogue-agent experiment)
+5. **Blog post** — single-agent vs multi-agent, coordination overhead, what makes multi-agent work
 
 ### Medium-Term
 
