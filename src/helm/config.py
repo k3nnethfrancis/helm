@@ -282,7 +282,7 @@ class LimitsConfig(BaseModel):
     """Resource limits for the experiment."""
 
     max_duration: str = "30m"
-    max_turns_per_agent: int = 50
+    max_turns_per_agent: int | None = None  # None = no turn limit
     # NOTE: max_budget_usd is metadata only — NOT enforced at runtime.
     # Cost is only known after each agent session ends (from the result event).
     # The real safety net is max_duration.
