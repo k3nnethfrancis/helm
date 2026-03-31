@@ -279,11 +279,11 @@ class Experiment:
     async def _stage_workspace_files(self) -> None:
         """Download or copy workspace files specified in config.
 
-        Entries in limits.workspace_files map destination filename to source.
+        Entries in environment.workspace_files map destination filename to source.
         Sources can be URLs (http/https) or local filesystem paths.
         """
         workspace = self.experiment_dir / "workspace"
-        for filename, source in self.config.limits.workspace_files.items():
+        for filename, source in self.config.environment.workspace_files.items():
             dest = workspace / filename
             dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -884,7 +884,7 @@ class Experiment:
                 "max_turns_per_agent": self.config.limits.max_turns_per_agent,
                 "max_budget_usd": self.config.limits.max_budget_usd,
                 "blocked_commands": self.config.limits.blocked_commands,
-                "workspace_files": self.config.limits.workspace_files,
+                "workspace_files": self.config.environment.workspace_files,
             },
             "created_at": datetime.now().isoformat(),
         }

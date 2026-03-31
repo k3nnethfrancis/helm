@@ -278,6 +278,16 @@ class BenchmarkConfig(BaseModel):
         return out if out else [0]
 
 
+class EnvironmentConfig(BaseModel):
+    """Workspace environment configuration.
+
+    Controls what files are planted in the agent workspace before the run starts.
+    Paths in workspace_files are relative to the experiment directory.
+    """
+
+    workspace_files: dict[str, str] = Field(default_factory=dict)
+
+
 class LimitsConfig(BaseModel):
     """Resource limits for the experiment."""
 
@@ -290,7 +300,6 @@ class LimitsConfig(BaseModel):
     blocked_commands: list[str] = Field(
         default_factory=lambda: ["rm -rf", "sudo"]
     )
-    workspace_files: dict[str, str] = Field(default_factory=dict)
 
     def duration_seconds(self) -> int:
         """Parse duration string to seconds."""
@@ -384,6 +393,7 @@ class ExperimentConfig(BaseModel):
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
     coordination: CoordinationConfig = Field(default_factory=CoordinationConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     benchmark: BenchmarkConfig | None = None
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     metadata: ExperimentMetadata = Field(default_factory=ExperimentMetadata)

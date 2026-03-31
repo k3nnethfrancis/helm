@@ -6,41 +6,50 @@ Each subdirectory is a self-contained experiment.
 
 ```
 experiments/{name}/
-├── README.md          # Purpose, hypothesis, design, conditions, findings
-├── experiment.md      # Detailed design notes (optional)
+├── README.md          # Purpose, hypothesis, design, findings (encouraged)
+├── experiment.md      # Detailed design notes (encouraged)
 ├── configs/           # Helm YAML configs (one per condition)
-├── docs/              # Supporting documentation, prompt evolution, references
-├── data/              # Experiment-specific data files (optional)
-└── runs/              # Auto-created by helm at runtime (gitignored)
+├── tasks/             # Task definitions (when not using a pre-built benchmark)
+├── environments/      # Files to plant in workspace (referenced by config)
+├── docs/              # Documentation, notes, references (subfolders as needed)
+└── runs/              # Auto-created by Helm at runtime (gitignored)
 ```
 
-**`runs/` is created automatically by Helm.** Each run produces:
+### Primitives
+
+| Folder | Purpose | Required? |
+|--------|---------|-----------|
+| `configs/` | Helm YAML configs — one per experimental condition | Yes |
+| `tasks/` | Task definitions (JSONL, markdown, etc.) | Only if not using SWE-bench or similar |
+| `environments/` | Files planted into agent workspace before run starts | Only if experiment needs planted artifacts |
+| `runs/` | Traces, logs, judge output, transcripts | Auto-created by Helm |
+
+### Documentation
+
+| File | Purpose |
+|------|---------|
+| `README.md` | Question, hypothesis, conditions, design, findings |
+| `experiment.md` | Detailed design notes |
+| `docs/` | Any supporting .md files, organized with subfolders as needed |
+
+### What Helm Produces (in `runs/`)
+
+Each run creates a subdirectory with:
 - `metadata.json` — config, timing, agent stats
 - `transcripts/full.json` + `full.md` — complete traces
 - `scores.json` — behavioral dimension scores
-- `evaluation/task_verification.json` — SWE-bench test results
-- `judge_artifacts/` — per-agent judge inputs, views, scores
-- `coordination/` — message files, signals, .helm-config.json
+- `evaluation/task_verification.json` — test results
+- `judge_artifacts/` — per-agent judge inputs and scores
+- `coordination/` — messages, signals, config
 - `mcp-configs/` — per-agent MCP server configs
 - `workspace/repo/` — the code agents worked on
-
-Don't create `runs/`, `results/`, or `figures/` manually. Helm creates what it needs.
-
-## README.md Template
-
-1. **Question** — What are we trying to learn?
-2. **Hypothesis** — What do we expect?
-3. **Conditions** — Table of configs and what varies
-4. **Design** — Tasks, limits, baselines, measurements
-5. **Running** — Exact commands
-6. **Findings** — Updated as results come in
 
 ## Config Standards
 
 - `shared_context` (top-level): situation all agents share
 - `context` (per-agent): role and instructions
 - `private_context` (per-agent, optional): hidden objectives
-- No `system_prompt` (deprecated). No framework language. No over-specified protocols.
+- `environment.workspace_files`: files to plant in workspace (paths relative to experiment dir)
 
 ## Running
 
