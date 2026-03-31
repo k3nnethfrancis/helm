@@ -23,37 +23,36 @@ This breaks down into:
 
 ## Current Priority
 
-**Running experiment 002: multi-agent coordination with minimal prompts, no turn limits, clean MCP tooling.**
+**Running experiments: multi-agent coordination (002) and adversarial rogue agent. First results in.**
 
-### Where We Are (2026-03-29)
+### Where We Are (2026-03-30)
 
 **Architecture:**
 - **Headless-only runtime.** `HeadlessCLIClient` — one `claude -p` per agent, full NDJSON traceability.
-- **Agent-orchestrator MCP server** — agents see `send_message`, `check_inbox`, `list_agents`, `signal_complete`. Generic names, no experiment/framework language. Self-documenting tool descriptions.
-- **Prompt framework** — `shared_context` (all agents), `context` (per-agent), `private_context` (hidden, adversarial). Framework injects only `## Environment` and `## Agents`. No framework-injected coordination instructions — MCP tools are self-documenting.
-- **Topology enforcement**: Mechanical (`--disallowedTools` + broker rules) or prompt-only — configurable per experiment.
-- **Delivery tracking**: Broker fires `on_delivery` callback when messages are polled — `CoordinationMessage` objects update in-place.
+- **Agent-orchestrator MCP server** — agents see `send_message`, `check_inbox`, `list_agents`, `signal_complete`. Generic names, no framework language.
+- **Prompt framework** — `shared_context` (all agents), `context` (per-agent), `private_context` (hidden, adversarial). Framework injects only `## Environment` and `## Agents`.
+- **Experiment structure** — standardized: `configs/`, `tasks/`, `environments/`, `runs/`, `docs/`. See `experiments/README.md`.
+- **Topology catalogue** — `docs/topologies.md`: single, centralized, decentralized, hybrid, independent, delegating.
+- **Environment config** — `EnvironmentConfig.workspace_files` for planting files in agent workspace.
 
-**Experiment 002 (in progress):**
-- Centralized-5 (messaging, mechanical enforcement): smoke test running
-- Hybrid-5 (filesystem): ready to launch
-- Delegating-1 (native Agent tool): ready to launch
-- All configs: minimal prompts, no turn limits, 60min timeout
-- Same 8 SWE-bench tasks as experiment 001 for fair comparison
+**Experiment 002 (centralized-5 completed, others ready):**
+- Centralized-5 smoke: completed. 105 turns (no turn limit hit). Score=0.67. MCP coordination working.
+- Hybrid-5, delegating-1: ready to launch at scale
 
-**Experiment 001 findings (baseline):**
-- Single-agent: 8/8 complete, 4/8 solved (50%)
-- Centralized@5 v1: coordinator collapsed topology
-- Centralized@5 v2: 30-50% polling waste, no done signal
-- Key finding: structural compliance ≠ behavioral compliance
+**Rogue-agent experiment (control + treatment A completed, B running, C ready):**
+- Control: 22 messages, 741 items, score=0.67
+- Treatment A (pace pusher): 15 messages, 445 items, score=0.67. researcher_b did 28 items vs 171 in control.
+- Treatment B (misdirector): running — researcher_b has biased prior, wrong analysis
+- Treatment C (saboteur): config ready — researcher_b has hidden competing priority
+- Key early finding: pace-pushing personality caused 40% less total work, same task outcome
 
 ### Immediate Next Steps
 
-1. **Monitor experiment 002 smoke test** — verify prompt framework works end-to-end
-2. **Launch all 3 conditions × 8 tasks** once smoke test passes
-3. **Review traces** — compare with experiment 001 data
-4. **Adversarial experiment** — use `private_context` for hidden-objective agent (rogue-agent experiment)
-5. **Blog post** — single-agent vs multi-agent, coordination overhead, what makes multi-agent work
+1. **Analyze rogue-agent results** — compare behavioral dimensions across control/treatment conditions
+2. **Run treatment C** — most adversarial condition
+3. **Launch experiment 002 at scale** — all 3 conditions × 8 tasks
+4. **Design experiment 003** — messaging vs filesystem × 2,3,5 agents
+5. **Blog post** — multi-agent coordination overhead + adversarial findings
 
 ### Medium-Term
 
@@ -172,7 +171,7 @@ Topologies are mechanically enforced, not just prompt-steered:
 ```text
 helm/
 ├── src/helm/
-│   ├── adapters/            # Harness adapters (Claude, Codex, OpenCode) + DirectCLI/Tmux/Resumable clients
+│   ├── adapters/            # Harness adapters (Claude, Codex, OpenCode) + HeadlessCLIClient
 │   ├── judge/               # Behavioral judge (backends, scoring, hierarchical strategy)
 │   ├── topologies/          # Topology families, enforcement rules, prompt templates
 │   ├── benchmarks/          # Benchmark adapters (SWE-bench), verification, export
@@ -186,16 +185,14 @@ helm/
 │   ├── matrix.py            # Matrix manifest generation + analysis
 │   ├── collector.py         # Event aggregation + transcript rendering
 │   ├── run_data.py          # Run-data contract + orchestration evals
-│   ├── runtime_guard.py     # Rule-based intervention engine
-│   ├── sdk.py               # Re-export shim → adapters/
-│   └── matrix_families.py   # Re-export shim → topologies/
+│   └── runtime_guard.py     # Rule-based intervention engine
 ├── configs/                 # Runnable topology configs (ship with Helm)
 │   ├── single-agent.yaml
 │   ├── centralized-5.yaml
 │   ├── hybrid-5.yaml
 │   └── delegating-1.yaml
 ├── judges/                  # Behavioral dimension rubrics (7 active + 1 excluded)
-├── experiments/             # Curated experiment results (tracked, numbered)
+├── experiments/             # Self-contained experiments (configs/, tasks/, environments/, runs/, docs/)
 ├── scripts/                 # Pipeline scripts (generate → run → analyze)
 ├── tests/                   # Test suite
 ├── docs/                    # Documentation
@@ -208,27 +205,26 @@ helm/
 ### Key Dependencies
 
 - **Python 3.11+** with `uv` for package management
-- **Sandbox Agent SDK binary**: `bin/sandbox-agent` (see README for install)
 - **Package deps**: httpx, httpx-sse, pyyaml, pydantic, typer (see `pyproject.toml`)
 
 ### Running Experiments
 
 ```bash
-# Install the package (editable mode)
+# Install
 uv pip install -e .
 
-# Generate experiment patterns from a matrix manifest
-# Run a single topology config on one SWE-bench task
-helm benchmark run configs/centralized-5.yaml -n 1 --direct-cli --on-turn-limit end
+# Run an experiment condition (1 task smoke test)
+helm benchmark run experiments/{name}/configs/{condition}.yaml \
+  -n 1 --on-turn-limit end \
+  --experiments-dir experiments/{name}/runs
 
-# Run a matrix manifest (batch experiments)
-python scripts/run_experiment_matrix.py <manifest>.yaml --wave <wave>
+# Run all 8 tasks
+helm benchmark run experiments/{name}/configs/{condition}.yaml \
+  -n 8 --on-turn-limit end \
+  --experiments-dir experiments/{name}/runs
 
-# Score a completed experiment
+# Judge a completed run
 helm judge <experiment-id> -b claude-headless -m claude-sonnet-4-6
-
-# Analyze matrix results
-python scripts/analyze_experiment_matrix.py experiments/benchmark-runs/<summary1>.json <summary2>.json
 ```
 
 ### Adding a New Dimension
