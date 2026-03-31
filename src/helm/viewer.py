@@ -7,6 +7,7 @@ Renders full.json transcripts into browsable single-file HTML with:
 - Full tool call inputs and results with expand/collapse
 - Markdown rendering of agent reasoning
 - Metadata in a collapsible top bar
+- 3D force-directed network graph of agent coordination (Three.js)
 """
 
 from __future__ import annotations
@@ -292,6 +293,66 @@ def _build_coordination_html(
     )
 
 
+def _build_network_data(
+    transcript: dict[str, Any],
+    run_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Extract network graph data from transcript and run data."""
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+
+    # Build agent nodes from run_data or transcript
+    agent_info: dict[str, dict[str, Any]] = {}
+    if run_data:
+        for a in run_data.get("agents", []):
+            agent_info[a.get("id", "")] = {
+                "role": a.get("role", "worker"),
+                "item_count": a.get("item_count", 0) or 0,
+                "turn_count": a.get("turn_count", 0) or 0,
+            }
+    # Fallback: infer from transcript agent keys
+    agents_dict = transcript.get("agents", {})
+    if isinstance(agents_dict, dict):
+        for aid in agents_dict:
+            if aid not in agent_info:
+                items = agents_dict[aid].get("items", []) if isinstance(agents_dict[aid], dict) else []
+                agent_info[aid] = {"role": "worker", "item_count": len(items), "turn_count": 0}
+
+    for aid, info in agent_info.items():
+        nodes.append({"id": aid, **info})
+
+    # Build edges from coordination messages
+    coord_msgs = transcript.get("coordination_messages", [])
+    for msg in coord_msgs:
+        if not isinstance(msg, dict):
+            continue
+        sender = msg.get("sender", "")
+        recipient = msg.get("recipient", "")
+        if not sender or not recipient:
+            continue
+        edges.append({
+            "source": sender,
+            "target": recipient,
+            "timestamp": msg.get("timestamp", ""),
+            "delivery_status": msg.get("delivery_status", "unknown"),
+            "content": str(msg.get("content", ""))[:300],
+            "message_type": msg.get("message_type", msg.get("type", "")),
+            "channel_medium": msg.get("channel_medium", ""),
+        })
+
+    topology = "unknown"
+    if run_data:
+        topology = (run_data.get("experiment") or {}).get("pattern", "unknown")
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "topology": topology,
+        "start_time": transcript.get("start_time", ""),
+        "end_time": transcript.get("end_time", ""),
+    }
+
+
 def render_html(
     transcript: dict[str, Any],
     run_data: dict[str, Any] | None = None,
@@ -421,8 +482,16 @@ def render_html(
         )
     header_html = (
         f"<div class='hdr-title'>{_escape(experiment_name)}</div>"
+        f"<div class='hdr-tabs'>"
+        f"<button class='tab active' data-view='transcripts'>Transcripts</button>"
+        f"<button class='tab' data-view='network'>Network</button>"
+        f"</div>"
         f"<div class='hdr-toggles'>{''.join(toggles)}</div>"
     )
+
+    # Network graph data
+    network_data = _build_network_data(transcript, run_data)
+    network_json = json.dumps(network_data, default=str)
 
     return _TEMPLATE.format(
         title=_escape(experiment_name),
@@ -431,6 +500,7 @@ def render_html(
         coordination=coord_html,
         panels="".join(panels_html),
         agent_ids_json=json.dumps(agent_ids),
+        network_data_json=network_json,
     )
 
 
@@ -573,6 +643,18 @@ details[open] > summary::before {{ content: '\u25be '; }}
 }}
 .toggle input {{ cursor: pointer; accent-color: var(--text-dim); }}
 .toggle:has(input:checked) {{ color: var(--text-bright); }}
+
+/* ─── TABS ─── */
+.hdr-tabs {{ display: flex; gap: 2px; margin-left: 24px; }}
+.tab {{
+  font-family: var(--mono); font-size: 11px;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-dim); padding: 4px 14px;
+  border-radius: var(--radius); cursor: pointer;
+  transition: all 0.15s;
+}}
+.tab:hover {{ background: var(--bg-2); color: var(--text); }}
+.tab.active {{ background: var(--bg-3); color: var(--text-bright); border-color: var(--border-strong); }}
 
 /* ─── MAIN LAYOUT ─── */
 .workspace {{ flex: 1; display: flex; overflow: hidden; }}
@@ -751,12 +833,13 @@ details[open] > summary::before {{ content: '\u25be '; }}
 /* ─── AGENT GRID ─── */
 .grid {{
   flex: 1;
-  display: grid;
+  display: none;
   grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   grid-auto-rows: minmax(0, 1fr);
   overflow: hidden;
   min-width: 0;
 }}
+.grid.active {{ display: grid; }}
 
 /* ─── AGENT PANEL ─── */
 .panel {{
@@ -941,6 +1024,68 @@ details[open] > summary::before {{ content: '\u25be '; }}
 }}
 .tool-err summary {{ color: var(--red-text); }}
 .rl {{ color: var(--text-dim); font-size: 11px; }}
+
+/* ─── NETWORK VIEW ─── */
+.view-network {{
+  flex: 1; position: relative; overflow: hidden; display: none;
+  background: var(--bg);
+}}
+.view-network.active {{ display: flex; flex-direction: column; }}
+.network-canvas-wrap {{
+  flex: 1; position: relative; min-height: 0;
+}}
+#network-canvas {{ width: 100%; height: 100%; display: block; }}
+.network-controls {{
+  position: absolute; bottom: 16px; left: 16px; right: 16px;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  padding: 8px 14px; border-radius: var(--radius);
+  z-index: 10;
+}}
+.network-btn {{
+  font-family: var(--mono); font-size: 11px;
+  background: var(--bg-3); border: 1px solid var(--border);
+  color: var(--text-dim); padding: 3px 10px;
+  border-radius: var(--radius); cursor: pointer;
+}}
+.network-btn:hover {{ color: var(--text-bright); border-color: var(--border-strong); }}
+.network-slider {{ flex: 1; accent-color: var(--text-dim); }}
+.network-time {{
+  font-family: var(--mono); font-size: 11px;
+  color: var(--text-dim); white-space: nowrap; min-width: 60px;
+  text-align: right;
+}}
+.network-empty {{
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--text-faint); font-family: var(--mono); font-size: 13px;
+}}
+.network-tooltip {{
+  position: absolute; pointer-events: none; z-index: 20;
+  background: var(--bg-2); border: 1px solid var(--border-strong);
+  padding: 8px 12px; border-radius: var(--radius);
+  font-family: var(--mono); font-size: 11px;
+  color: var(--text); max-width: 320px;
+  line-height: 1.5; display: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}}
+.network-tooltip .tt-label {{
+  color: var(--text-bright); font-weight: 600; margin-bottom: 4px;
+}}
+.network-tooltip .tt-dim {{ color: var(--text-dim); }}
+.network-tooltip .tt-content {{
+  margin-top: 4px; color: var(--text);
+  max-height: 120px; overflow: hidden;
+  word-break: break-word;
+}}
+.network-stats {{
+  position: absolute; top: 16px; right: 16px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  padding: 8px 12px; border-radius: var(--radius);
+  font-family: var(--mono); font-size: 10px;
+  color: var(--text-dim); z-index: 10;
+  line-height: 1.8;
+}}
+.network-stats .stat-val {{ color: var(--text-bright); }}
 </style>
 </head>
 <body>
@@ -954,23 +1099,48 @@ details[open] > summary::before {{ content: '\u25be '; }}
 </div>
 {coordination}
 </div>
-<div class="grid" id="grid">
+<div class="grid active" id="view-transcripts">
 {panels}
 </div>
+<div class="view-network" id="view-network">
+<div class="network-canvas-wrap">
+<canvas id="network-canvas"></canvas>
+<div class="network-tooltip" id="network-tooltip"></div>
+<div class="network-stats" id="network-stats"></div>
 </div>
+<div class="network-controls" id="network-controls">
+<button class="network-btn" id="net-play">&#9654;</button>
+<input type="range" class="network-slider" id="net-slider" min="0" max="1000" value="1000">
+<span class="network-time" id="net-time">--:--</span>
+</div>
+</div>
+</div>
+<script type="importmap">
+{{
+  "imports": {{
+    "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.min.js"
+  }}
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+window.THREE = THREE;
+window.dispatchEvent(new Event('three-ready'));
+</script>
 <script>
 const agentIds = {agent_ids_json};
+const COORD_DATA = {network_data_json};
 const panels = document.querySelectorAll('.panel');
 const checkboxes = document.querySelectorAll('.toggle input[data-agent]');
 
-function update() {{
+function updatePanels() {{
   panels.forEach(p => {{
     const aid = p.dataset.agent;
     const cb = document.querySelector(`input[data-agent="${{aid}}"]`);
     p.classList.toggle('active', cb && cb.checked);
   }});
   const visible = document.querySelectorAll('.panel.active').length;
-  const grid = document.getElementById('grid');
+  const grid = document.getElementById('view-transcripts');
   if (visible <= 1) {{
     grid.style.gridTemplateColumns = '1fr';
   }} else if (visible <= 2) {{
@@ -980,9 +1150,8 @@ function update() {{
   }}
 }}
 
-checkboxes.forEach(cb => cb.addEventListener('change', update));
+checkboxes.forEach(cb => cb.addEventListener('change', updatePanels));
 
-// Click-to-expand on clipped prose and log entries
 document.querySelectorAll('.prose-clipped, .log-clipped').forEach(el => {{
   el.addEventListener('click', () => {{
     el.classList.toggle('prose-expanded');
@@ -990,7 +1159,291 @@ document.querySelectorAll('.prose-clipped, .log-clipped').forEach(el => {{
   }});
 }});
 
-update();
+updatePanels();
+
+/* ─── TAB SWITCHING ─── */
+document.querySelectorAll('.tab').forEach(tab => {{
+  tab.addEventListener('click', () => {{
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const v = tab.dataset.view;
+    document.getElementById('view-transcripts').classList.toggle('active', v === 'transcripts');
+    document.getElementById('view-network').classList.toggle('active', v === 'network');
+    if (v === 'network') initNetwork();
+  }});
+}});
+
+/* ─── 3D NETWORK GRAPH ─── */
+let networkInit = false;
+let threeReady = !!window.THREE;
+let pendingInit = false;
+
+window.addEventListener('three-ready', () => {{
+  threeReady = true;
+  if (pendingInit) initNetwork();
+}});
+
+function initNetwork() {{
+  if (networkInit) return;
+  if (!threeReady) {{ pendingInit = true; return; }}
+  networkInit = true;
+
+  const THREE = window.THREE;
+  const container = document.querySelector('.network-canvas-wrap');
+  const canvas = document.getElementById('network-canvas');
+  const tooltip = document.getElementById('network-tooltip');
+  const statsEl = document.getElementById('network-stats');
+  const slider = document.getElementById('net-slider');
+  const timeLabel = document.getElementById('net-time');
+  const playBtn = document.getElementById('net-play');
+
+  const nodes = COORD_DATA.nodes;
+  const edges = COORD_DATA.edges;
+
+  if (!nodes.length) {{
+    container.innerHTML = '<div class="network-empty">No coordination data for network visualization</div>';
+    document.getElementById('network-controls').style.display = 'none';
+    return;
+  }}
+
+  // Stats
+  const delivered = edges.filter(e => e.delivery_status === 'delivered').length;
+  statsEl.innerHTML =
+    `<div>nodes: <span class="stat-val">${{nodes.length}}</span></div>` +
+    `<div>messages: <span class="stat-val">${{edges.length}}</span></div>` +
+    `<div>delivered: <span class="stat-val">${{delivered}}/${{edges.length}}</span></div>` +
+    `<div>topology: <span class="stat-val">${{COORD_DATA.topology}}</span></div>`;
+
+  // Parse timestamps
+  const edgeTimes = edges.map(e => new Date(e.timestamp).getTime()).filter(t => !isNaN(t));
+  const tMin = edgeTimes.length ? Math.min(...edgeTimes) : 0;
+  const tMax = edgeTimes.length ? Math.max(...edgeTimes) : 1;
+  const tRange = Math.max(tMax - tMin, 1);
+
+  // Layout: topology-aware positioning
+  const positions = {{}};
+  const hubNode = nodes.find(n => n.role === 'hub');
+  const workerNodes = nodes.filter(n => n.role !== 'hub');
+
+  if (nodes.length === 1) {{
+    positions[nodes[0].id] = [0, 0, 0];
+  }} else if (hubNode) {{
+    positions[hubNode.id] = [0, 0, 0];
+    workerNodes.forEach((n, i) => {{
+      const angle = (i / workerNodes.length) * Math.PI * 2 - Math.PI / 2;
+      const r = 5;
+      positions[n.id] = [Math.cos(angle) * r, 0, Math.sin(angle) * r];
+    }});
+  }} else {{
+    nodes.forEach((n, i) => {{
+      const angle = (i / nodes.length) * Math.PI * 2;
+      const r = 4;
+      positions[n.id] = [Math.cos(angle) * r, 0, Math.sin(angle) * r];
+    }});
+  }}
+
+  // Scene
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0c0c0c);
+
+  const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 100);
+  const renderer = new THREE.WebGLRenderer({{ canvas, antialias: true }});
+  renderer.setSize(width, height);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  // Orbit controls (inline)
+  let isDragging = false, prevMouse = {{x:0, y:0}};
+  let camTheta = Math.PI/4, camPhi = Math.PI/4, camDist = 14;
+
+  function updateCamera() {{
+    camera.position.x = camDist * Math.sin(camPhi) * Math.sin(camTheta);
+    camera.position.y = camDist * Math.cos(camPhi);
+    camera.position.z = camDist * Math.sin(camPhi) * Math.cos(camTheta);
+    camera.lookAt(0, 0, 0);
+  }}
+  updateCamera();
+
+  canvas.addEventListener('mousedown', e => {{ isDragging = true; prevMouse = {{x: e.clientX, y: e.clientY}}; }});
+  canvas.addEventListener('mousemove', e => {{
+    if (!isDragging) return;
+    camTheta += (e.clientX - prevMouse.x) * 0.008;
+    camPhi = Math.max(0.1, Math.min(Math.PI - 0.1, camPhi + (e.clientY - prevMouse.y) * 0.008));
+    prevMouse = {{x: e.clientX, y: e.clientY}};
+    updateCamera();
+  }});
+  canvas.addEventListener('mouseup', () => {{ isDragging = false; }});
+  canvas.addEventListener('mouseleave', () => {{ isDragging = false; }});
+  canvas.addEventListener('wheel', e => {{
+    camDist = Math.max(4, Math.min(30, camDist + e.deltaY * 0.01));
+    updateCamera();
+    e.preventDefault();
+  }}, {{passive: false}});
+
+  // Lighting
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(5, 10, 5);
+  scene.add(dirLight);
+
+  // Grid
+  const gridHelper = new THREE.GridHelper(16, 16, 0x1a1a1a, 0x1a1a1a);
+  gridHelper.position.y = -0.5;
+  scene.add(gridHelper);
+
+  // Nodes
+  const nodeColors = {{ hub: 0xd4a847, worker: 0x4a90d9 }};
+  const maxItems = Math.max(1, ...nodes.map(n => n.item_count));
+  const nodeMeshes = {{}};
+  const nodeData = {{}};
+
+  nodes.forEach(n => {{
+    const radius = 0.3 + (n.item_count / maxItems) * 0.7;
+    const color = nodeColors[n.role] || nodeColors.worker;
+    const mat = new THREE.MeshPhongMaterial({{
+      color, emissive: n.role === 'hub' ? 0x3a2a00 : 0x0a1a2a,
+      shininess: 60, transparent: true, opacity: 0.92,
+    }});
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 24, 24), mat);
+    const [x, y, z] = positions[n.id] || [0,0,0];
+    mesh.position.set(x, y, z);
+    scene.add(mesh);
+    nodeMeshes[n.id] = mesh;
+    nodeData[n.id] = n;
+
+    // Base ring
+    const ringMat = new THREE.MeshBasicMaterial({{ color, side: THREE.DoubleSide, transparent: true, opacity: 0.3 }});
+    const ring = new THREE.Mesh(new THREE.RingGeometry(radius + 0.05, radius + 0.15, 32), ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, -0.45, z);
+    scene.add(ring);
+  }});
+
+  // Edge pair counts
+  const pairCounts = {{}};
+  edges.forEach(e => {{
+    const key = [e.source, e.target].sort().join('|');
+    pairCounts[key] = (pairCounts[key] || 0) + 1;
+  }});
+  const maxPairCount = Math.max(1, ...Object.values(pairCounts));
+
+  // Static edge lines
+  const edgeLines = {{}};
+  const drawnPairs = new Set();
+  edges.forEach(e => {{
+    const key = [e.source, e.target].sort().join('|');
+    if (drawnPairs.has(key)) return;
+    drawnPairs.add(key);
+    const s = positions[e.source], t = positions[e.target];
+    if (!s || !t) return;
+    const opacity = 0.15 + ((pairCounts[key] || 1) / maxPairCount) * 0.35;
+    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...s), new THREE.Vector3(...t)]);
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({{ color: 0x3a3a3a, transparent: true, opacity }}));
+    scene.add(line);
+    edgeLines[key] = line;
+  }});
+
+  // Message particles
+  const statusColors = {{ delivered: 0x4a9060, not_attempted: 0x9a7040, failed: 0xd05050, unknown: 0x6a6a6a }};
+  const particleGeo = new THREE.SphereGeometry(0.12, 8, 8);
+  const particles = edges.map(e => {{
+    const mat = new THREE.MeshBasicMaterial({{ color: statusColors[e.delivery_status] || 0x6a6a6a, transparent: true, opacity: 0.9 }});
+    const mesh = new THREE.Mesh(particleGeo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    const ts = new Date(e.timestamp).getTime();
+    return {{ mesh, source: positions[e.source] || [0,0,0], target: positions[e.target] || [0,0,0], t: isNaN(ts) ? tMin : ts, edge: e }};
+  }});
+
+  // Time state
+  let currentT = tMax, playing = false, playStart = null;
+  const playDuration = 8000;
+
+  function setTime(t) {{
+    currentT = t;
+    const secs = Math.floor((t - tMin) / 1000);
+    timeLabel.textContent = String(Math.floor(secs/60)).padStart(2,'0') + ':' + String(secs%60).padStart(2,'0');
+    slider.value = Math.round(((t - tMin) / tRange) * 1000);
+
+    const win = tRange * 0.08;
+    particles.forEach(p => {{
+      const age = t - p.t;
+      if (age < 0 || age > win) {{ p.mesh.visible = false; return; }}
+      p.mesh.visible = true;
+      const frac = age / win;
+      const [sx,sy,sz] = p.source, [tx,ty,tz] = p.target;
+      p.mesh.position.set(sx+(tx-sx)*frac, sy+(ty-sy)*frac + 1.5*Math.sin(frac*Math.PI), sz+(tz-sz)*frac);
+      p.mesh.material.opacity = 0.9 * (1 - frac * 0.5);
+    }});
+
+    Object.values(edgeLines).forEach(l => l.material.color.setHex(0x3a3a3a));
+    edges.forEach(e => {{
+      const et = new Date(e.timestamp).getTime();
+      if (et <= t) {{
+        const line = edgeLines[[e.source, e.target].sort().join('|')];
+        if (line) line.material.color.setHex(statusColors[e.delivery_status] || 0x4a4a4a);
+      }}
+    }});
+  }}
+
+  slider.addEventListener('input', () => {{
+    setTime(tMin + (parseInt(slider.value) / 1000) * tRange);
+    playing = false;
+    playBtn.innerHTML = '&#9654;';
+  }});
+
+  playBtn.addEventListener('click', () => {{
+    playing = !playing;
+    playBtn.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
+    if (playing) {{ playStart = performance.now(); if (currentT >= tMax) setTime(tMin); }}
+  }});
+
+  // Hover
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  const allNodeMeshes = Object.values(nodeMeshes);
+
+  canvas.addEventListener('mousemove', e => {{
+    if (isDragging) {{ tooltip.style.display = 'none'; return; }}
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObjects(allNodeMeshes);
+    if (hits.length) {{
+      const aid = Object.keys(nodeMeshes).find(k => nodeMeshes[k] === hits[0].object);
+      if (aid && nodeData[aid]) {{
+        const n = nodeData[aid];
+        tooltip.innerHTML = `<div class="tt-label">${{n.id}}</div><div class="tt-dim">role: ${{n.role}}</div><div class="tt-dim">items: ${{n.item_count}} · turns: ${{n.turn_count}}</div>`;
+        tooltip.style.display = 'block';
+        tooltip.style.left = (e.clientX - container.getBoundingClientRect().left + 12) + 'px';
+        tooltip.style.top = (e.clientY - container.getBoundingClientRect().top - 10) + 'px';
+      }}
+    }} else {{ tooltip.style.display = 'none'; }}
+  }});
+
+  // Animate
+  function animate() {{
+    requestAnimationFrame(animate);
+    if (playing) {{
+      const frac = Math.min((performance.now() - playStart) / playDuration, 1);
+      setTime(tMin + frac * tRange);
+      if (frac >= 1) {{ playing = false; playBtn.innerHTML = '&#9654;'; }}
+    }}
+    renderer.render(scene, camera);
+  }}
+
+  new ResizeObserver(() => {{
+    const w = container.clientWidth, h = container.clientHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  }}).observe(container);
+
+  setTime(tMax);
+  animate();
+}}
 </script>
 </body>
 </html>
